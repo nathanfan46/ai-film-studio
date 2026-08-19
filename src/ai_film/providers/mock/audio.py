@@ -24,23 +24,23 @@ class MockAudioProvider:
         self._poll_counts: dict[str, int] = {}
         self._requests: dict[str, AudioRequest] = {}
 
-    def _submit(self, request: AudioRequest) -> GenerationJob:
+    def _submit(self, request: AudioRequest, capability: Capability) -> GenerationJob:
         self._submit_calls += 1
         if self._submit_calls <= self.fail_first_n_submits:
             raise ProviderError("simulated submit failure")
         job_id = f"mock-audio-{self._submit_calls}"
         self._requests[job_id] = request
         self._poll_counts[job_id] = 0
-        return GenerationJob(provider="mock", id=job_id, capability=Capability.VOICE)
+        return GenerationJob(provider="mock", id=job_id, capability=capability)
 
     def submit_voice(self, request: VoiceGenerationRequest) -> GenerationJob:
-        return self._submit(request)
+        return self._submit(request, Capability.VOICE)
 
     def submit_sfx(self, request: SfxGenerationRequest) -> GenerationJob:
-        return self._submit(request)
+        return self._submit(request, Capability.SFX)
 
     def submit_music(self, request: MusicGenerationRequest) -> GenerationJob:
-        return self._submit(request)
+        return self._submit(request, Capability.MUSIC)
 
     def poll(self, job: GenerationJob) -> JobStatus:
         self._poll_counts[job.id] += 1

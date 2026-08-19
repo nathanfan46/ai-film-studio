@@ -4,8 +4,11 @@ import pytest
 
 from ai_film.errors import ProviderError
 from ai_film.models import (
+    Capability,
     ImageGenerationRequest,
     JobStatus,
+    MusicGenerationRequest,
+    SfxGenerationRequest,
     VoiceGenerationRequest,
 )
 from ai_film.providers.mock.image import MockImageProvider
@@ -50,6 +53,33 @@ def test_mock_audio_provider_submit_voice(tmp_path: Path):
         output_path=str(tmp_path / "dialogue.wav"),
     )
     job = provider.submit_voice(request)
+    assert job.capability == Capability.VOICE
+    assert provider.poll(job) == JobStatus.COMPLETED
+    result = provider.get_result(job)
+    assert Path(result.artifact_path).exists()
+
+
+def test_mock_audio_provider_submit_sfx(tmp_path: Path):
+    provider = MockAudioProvider()
+    request = SfxGenerationRequest(
+        prompt="door slam", model="sfx-v1",
+        output_path=str(tmp_path / "sfx.wav"),
+    )
+    job = provider.submit_sfx(request)
+    assert job.capability == Capability.SFX
+    assert provider.poll(job) == JobStatus.COMPLETED
+    result = provider.get_result(job)
+    assert Path(result.artifact_path).exists()
+
+
+def test_mock_audio_provider_submit_music(tmp_path: Path):
+    provider = MockAudioProvider()
+    request = MusicGenerationRequest(
+        prompt="upbeat electronic", model="music-v1", duration_seconds=30.0,
+        output_path=str(tmp_path / "music.wav"),
+    )
+    job = provider.submit_music(request)
+    assert job.capability == Capability.MUSIC
     assert provider.poll(job) == JobStatus.COMPLETED
     result = provider.get_result(job)
     assert Path(result.artifact_path).exists()
