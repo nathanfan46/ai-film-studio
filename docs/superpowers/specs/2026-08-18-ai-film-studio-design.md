@@ -1,6 +1,6 @@
 # AI Film Studio — v1 Design
 
-**Status:** Approved for implementation
+**Status:** Architecture frozen. Implementation details may evolve.
 **Date:** 2026-08-18
 
 ## 1. Overview
@@ -62,13 +62,19 @@ system where an equally valid caller could be a script, a CI job, or a future we
                          │
                     shot.json                 ← canonical contract, single source of
                          │                       truth for current state
-                    Editor / Render
+                Render Preflight → Editor / Render
                          │
                      final.mp4
 
 (separately, unconnected to the production path:)
     Claude  →  fal-ai-media MCP  →  ad-hoc creative exploration only
 ```
+
+Within the Service Layer, two responsibilities are distinct components, not one
+undifferentiated blob: the **Cost Gate** (checks `generation_approval` before any
+`submit()` reaches a provider) and the **Job Manager** (submit/poll/backoff/retry
+bookkeeping, independent of whether the call was approved). The Cost Gate sits in
+front of the Job Manager on every call path.
 
 **Core principle:** the AI Film Skill and its agents never depend on a specific
 provider. Agents call the `ai-film` CLI; the CLI delegates to application services;
@@ -112,9 +118,13 @@ ai-film-studio/
 │   │   ├── video_service.py
 │   │   └── audio_service.py            # generate_voice / generate_sfx / generate_music
 │   ├── providers/
-│   │   ├── base.py                     # Protocols + GenerationJob/JobStatus
-│   │   ├── fal/{image,video,audio}.py
-│   │   └── mock/{image,video,audio}.py
+│   │   ├── base.py                     # Protocols + GenerationJob/JobStatus + ProviderCatalog
+│   │   ├── fal/
+│   │   │   ├── __init__.py
+│   │   │   └── {image,video,audio}.py
+│   │   └── mock/
+│   │       ├── __init__.py
+│   │       └── {image,video,audio}.py
 │   ├── jobs.py                         # submit/wait/get_result, retry+backoff
 │   ├── schema.py                       # shot.json JSON Schema + validation
 │   └── render.py                       # render manifest + FFmpeg/Remotion invocation
@@ -219,9 +229,17 @@ Full v1 shape:
 ```
 
 Field notes:
-- `status` (top-level) ∈ `draft | ready | generating | completed | failed` — the
-  aggregate lifecycle of the shot, rolled up from `continuity` + `generation.*` for
-  cheap reporting (`ai-film status`) without recomputing from every substage.
+- `status` (top-level) ∈ `draft | ready | generating | completed | failed` — **this is
+  service-managed derived state, never hand-authored by an agent.** Only the CLI/
+  service layer may write it, computed deterministically from `continuity.status` and
+  `generation.*.status`:
+  `continuity != passed → draft/ready` (per whether shots exist yet);
+  `any generation.<required stage> == running/queued → generating`;
+  `any generation.<required stage> == failed → failed`;
+  `all required stages ∈ {completed, not_required} → completed`.
+  An agent writing `status` directly (e.g. to force `"completed"`) is a bug, not a
+  valid use of the contract — it would let `status` and `generation.*` disagree, which
+  is exactly the corruption this field exists to summarize away.
 - `continuity.status` ∈ `pending | passed | warning | failed`.
 - `generation.<stage>.status` ∈
   `pending | queued | running | completed | failed | not_required`.
@@ -281,12 +299,38 @@ Generation is always modeled as an async job (`submit` → poll → `get_result`
 blocking call — required for video generations that can take minutes, and for
 retries/cancellation/parallelism/resumability to work uniformly across stages.
 
+**Model catalog is explicit, not agent-guessed.** `/ai-film-setup` and `ai-film models`
+must read available model IDs from a `ProviderCatalog` rather than have Claude
+free-type a model string into `config.json`:
+
+```python
+class ProviderCatalog(Protocol):
+    def models(self, capability: Capability) -> list[ModelInfo]: ...
+```
+
+v1 ships a static catalog per backend (e.g. `fal.py` declares the exact model IDs it
+supports: `nano-banana`, `veo-3`, `kling`, `seedance`, ...). This exists specifically
+to prevent a class of bug where an agent writes `"veo-3.1"` into config but the
+provider only recognizes `"veo3"` — the setup command can only select from IDs the
+catalog actually knows about, never an arbitrary string.
+
 ## 6. Cost Gate (hard execution boundary)
 
-Paid generation is refused by the **service layer**, not merely discouraged by agent
-instructions — an agent cannot accidentally or intentionally bypass it. `config.json`
-is organized into separate top-level sections so provider choice, runtime tuning, and
-approval state never get muddled together:
+**Any provider call that may incur external cost is refused by the service layer**
+unless covered by an active approval — not just "paid generation" in the video/image
+sense. A Character/Environment agent's reference-image generation goes through the
+identical gate as an Image agent's storyboard generation; there is no implicit
+"this one's just a reference, it doesn't count" exemption. Only calls to a provider
+explicitly marked local/free (e.g. `Mock*Provider` in tests) skip the gate.
+
+Because bible reference images are generated *before* shots exist, there are two
+independent checkpoints in the pipeline, not one — see the updated diagram in §8:
+a `bibles` approval gates Character/Environment/Style reference-image generation, and
+a `storyboard` approval gates the (much larger) per-shot Image/Video/Audio generation.
+Each is tracked, scoped, and logged independently.
+
+`config.json` is organized into separate top-level sections so provider choice,
+runtime tuning, and approval state never get muddled together:
 
 ```json
 {
@@ -301,21 +345,46 @@ approval state never get muddled together:
   },
   "render": {},
   "generation_approval": {
-    "approved": false,
-    "approved_at": null,
-    "scope": "current_storyboard",
-    "estimated_cost": null
+    "bibles": {
+      "approved": true,
+      "approved_at": "2026-08-18T20:10:00Z",
+      "scope": {
+        "type": "bibles",
+        "target_ids": ["char:girl", "env:corridor", "style:global"]
+      },
+      "estimated_cost": 0.40
+    },
+    "storyboard": {
+      "approved": false,
+      "approved_at": null,
+      "scope": {
+        "type": "storyboard_revision",
+        "revision": 3,
+        "target_ids": ["S01_SH01", "S01_SH02", "S01_SH03", "S01_SH04"]
+      },
+      "estimated_cost": null
+    }
   }
 }
 ```
 
-Flow: once Storyboard + Continuity pass, the Director agent computes a cost estimate
-across all pending shots and calls `ai-film approve-generation --scope current_storyboard`
-(prompting the user for confirmation first). This writes `generation_approval.approved
-= true` with a timestamp and cost snapshot into `config.json`. Any `ai-film generate-*`
-call checks this flag in the service layer and refuses with a clear error if approval
-is missing or the scope doesn't cover the requested shots. Approval is scoped, not
-global — adding new shots later requires re-approval for the new scope.
+**Approval scope is an immutable snapshot, not a dynamic query.** `scope` is never the
+string `"current_storyboard"` — that phrase is ambiguous about which shots it covers
+once the storyboard changes. Instead it records the exact `target_ids` covered at
+approval time (character/environment/style IDs for `bibles`; shot IDs for
+`storyboard_revision`, plus the `revision` number so re-approvals after a storyboard
+edit are traceable). Any target ID not present in the relevant `scope.target_ids` is
+simply not approved, full stop — the CLI never has to infer "does this shot count as
+part of the current storyboard."
+
+Flow: the Character/Environment/Style agent computes a cost estimate for reference
+images and calls `ai-film approve-generation --scope bibles --targets char:girl,env:corridor,...`
+before generating any bible reference image. Later, once Storyboard + Continuity pass,
+the Director agent does the same for shots:
+`ai-film approve-generation --scope storyboard --targets S01_SH01,S01_SH02,...`. Both
+prompt the user for confirmation first, write their snapshot into the matching
+`generation_approval.<scope>` key, and are independently re-required whenever their
+target set changes (new character, new shot, storyboard revision).
 
 **`config.json` is user-editable and therefore not tamper-proof** — someone could hand-edit
 `"approved": true`. v1 does not need cryptographic signing, but `approve-generation`
@@ -344,15 +413,25 @@ an accurate historical record of what was actually generated with what.
 
 ## 8. Agent Pipeline
 
-The approval checkpoint is an explicit stage in the pipeline, not something each
-generation agent independently decides to respect:
+The approval checkpoint is an explicit stage in the pipeline — twice, since bible
+reference images and per-shot generation are both real cost but happen at different
+points — not something each generation agent independently decides to respect:
 
 ```
-Director → Bibles → Storyboard → Continuity
+Director → Bibles drafted (text)
+                │
+        ──────────────────
+        💰 COST GATE: bibles
+    (approve-generation --scope bibles)
+        ──────────────────
+                │
+     Bible reference images generated
+                │
+            Storyboard → Continuity
                                       │
                               ──────────────
-                              💰 COST GATE
-                        (ai-film approve-generation)
+                        💰 COST GATE: storyboard
+                  (approve-generation --scope storyboard)
                               ──────────────
                                       │
                     Image / Video / Voice / Sfx / Music
@@ -362,9 +441,9 @@ Director → Bibles → Storyboard → Continuity
                                   final.mp4
 ```
 
-No agent downstream of Continuity is permitted to call `generate-*` until
-`generation_approval.approved` is true for its shots' scope — enforced by the service
-layer (§6), not by agent instructions.
+No agent is permitted to call `generate-*` until the matching
+`generation_approval.<scope>.approved` is true and covers its target IDs — enforced by
+the service layer's Cost Gate (§2, §6), not by agent instructions.
 
 | Agent | Reads | Writes | Role |
 |---|---|---|---|
@@ -386,9 +465,10 @@ layer (§6), not by agent instructions.
 - `/create-film "Title"` — runs `ai-film init`, then hands off to the Director agent.
 
 **`ai-film` CLI subcommands:**
-`init`, `generate-image`, `generate-video`, `generate-voice`, `generate-sfx`,
-`generate-music`, `check-continuity`, `approve-generation`, `render`, `status`,
-`validate` (schema check).
+`init`, `models` (lists the provider/model catalog — see §5), `generate-image`,
+`generate-video`, `generate-voice`, `generate-sfx`, `generate-music`,
+`check-continuity`, `approve-generation --scope bibles|storyboard --targets <id,id,...>`,
+`render`, `status`, `validate` (schema check).
 
 ## 10. Error Handling, Retries, Concurrency
 
@@ -405,6 +485,11 @@ layer (§6), not by agent instructions.
   └── approvals/
       └── 20260818T205000_generation_approved.json
   ```
+  Each log entry records its `attempt` number and the provider `job.id` used for that
+  specific attempt (`{"attempt": 2, "job": {"provider": "fal", "id": "j2"}}`), even
+  though `shot.json` itself only ever holds the *current* (latest) job — retrying
+  three times means three distinct provider job IDs, and only the log preserves that
+  full history.
 - **Logs must redact secrets before persistence** — API keys, `Authorization`
   headers, signed/temporary download URLs, and any other credential-shaped values are
   replaced with `"[REDACTED]"` before a request/response payload is written to disk.
@@ -436,6 +521,19 @@ The Editor agent produces a **render manifest** before invoking FFmpeg/Remotion:
 `start` offsets are stored on individual shots in v1; the editor computes the timeline
 from shot order. This keeps the render step debuggable in isolation from generation.
 
+**`ai-film render` runs a preflight validation before invoking FFmpeg/Remotion**, so a
+missing or broken artifact is caught immediately rather than after a slow render
+attempt:
+```
+✓ every shot referenced in the manifest exists in 03_shots/
+✓ every referenced video/audio artifact path exists on disk and is non-empty
+✓ no referenced artifact's generation.<stage>.status == "failed"
+✓ all referenced paths resolve inside the project directory (no path escapes)
+✓ referenced media files are readable and their duration is known/derivable
+```
+Preflight failure aborts before FFmpeg runs, with a report of exactly which shots/
+artifacts are missing or invalid.
+
 ## 12. Testing Strategy
 
 - Unit tests for services/CLI run entirely against `Mock*Provider` — no network calls,
@@ -452,11 +550,13 @@ from shot order. This keeps the render step debuggable in isolation from generat
 ✓ continuity check passes
 ✓ cost gate blocks generation until approved, then unblocks after approval
 ✓ approval event recorded immutably under 99_logs/approvals/
+✓ approval scope snapshot rejects a shot ID not in that snapshot
 ✓ provider job submits
 ✓ job completes
-✓ artifact exists on disk
+✓ artifact exists on disk and is readable by the renderer (not just present — non-empty, valid media)
+✓ render preflight passes
 ✓ render succeeds from manifest
-✓ final/reel_001.mp4 exists
+✓ final/reel_001.mp4 exists and is a playable video file
 ✓ ai-film status reports all shots completed
 ```
 
