@@ -152,6 +152,7 @@ Full v1 shape:
 {
   "schema_version": "1.0",
   "id": "S01_SH07",
+  "status": "generating",
   "duration_seconds": 5,
 
   "characters": [
@@ -159,8 +160,7 @@ Full v1 shape:
   ],
 
   "inputs": {
-    "references": ["assets/characters/girl/reference.png"],
-    "image": "04_storyboard/SH07.png"
+    "references": ["assets/characters/girl/reference.png"]
   },
 
   "camera": { "shot": "close_up", "lens": "85mm", "movement": "slow_push_in" },
@@ -180,7 +180,12 @@ Full v1 shape:
       "model": "nano-banana",
       "status": "completed",
       "job": { "provider": "fal", "id": "j1" },
-      "artifact": "04_storyboard/SH07.png",
+      "inputs": ["assets/characters/girl/reference.png"],
+      "artifact": {
+        "path": "04_storyboard/SH07.png",
+        "size_bytes": 842011,
+        "sha256": null
+      },
       "attempts": 1,
       "created_at": "...",
       "started_at": "...",
@@ -191,21 +196,54 @@ Full v1 shape:
       "model": "veo-3",
       "status": "pending",
       "job": null,
+      "inputs": ["04_storyboard/SH07.png", "assets/characters/girl/reference.png"],
       "artifact": null,
       "attempts": 0,
       "created_at": null,
       "started_at": null,
       "completed_at": null
-    }
+    },
+    "voice": {
+      "provider": "fal",
+      "model": "csm-1b",
+      "status": "pending",
+      "job": null,
+      "inputs": [],
+      "artifact": null,
+      "attempts": 0
+    },
+    "sfx": { "status": "not_required" },
+    "music": { "status": "not_required" }
   }
 }
 ```
 
 Field notes:
+- `status` (top-level) ∈ `draft | ready | generating | completed | failed` — the
+  aggregate lifecycle of the shot, rolled up from `continuity` + `generation.*` for
+  cheap reporting (`ai-film status`) without recomputing from every substage.
 - `continuity.status` ∈ `pending | passed | warning | failed`.
-- `generation.<stage>.status` ∈ `pending | queued | running | completed | failed`.
+- `generation.<stage>.status` ∈
+  `pending | queued | running | completed | failed | not_required`.
+  `not_required` means the shot was evaluated and this stage doesn't apply (e.g. no
+  music cue for this shot) — distinct from `pending` (not yet attempted) so
+  `ai-film status` never has to guess what "missing" means.
 - `generation.<stage>.job` is `{provider, id}` — job IDs are provider-scoped, never
   assumed globally unique or meaningful across providers.
+- `generation.<stage>.inputs` lists the artifact paths that stage actually depends on
+  (e.g. video depends on the storyboard image *and* character references). The
+  top-level `inputs` block only holds dependencies known at storyboard-creation time
+  (reference assets); artifacts produced by earlier pipeline stages (like the
+  storyboard image) are declared on the generation stage that consumes them, once
+  they exist. A stage must validate its declared `inputs` exist on disk before
+  calling `submit()`.
+- `duration_seconds` (top-level) is the creative target; the actual rendered length
+  lives on the artifact — see below.
+- `generation.<stage>.artifact` is `{path, size_bytes, sha256}` once completed
+  (`sha256` may be `null` in v1 — full checksum verification is a fast-follow, not a
+  v1 blocker) plus `duration_seconds` on video/audio artifacts specifically, to
+  distinguish target vs. actual:
+  `"artifact": {"path": "...", "size_bytes": ..., "sha256": null, "duration_seconds": 4.8}`.
 - Every `shot.json` write records the *actual* provider/model used, so the project
   stays historically accurate even after `config.json` changes later (see §7).
 
@@ -218,10 +256,22 @@ class ImageProvider(Protocol):
     def get_result(self, job: GenerationJob) -> ImageGenerationResult: ...
 ```
 
-Same shape for `VideoProvider`. `AudioProvider` exposes three explicit methods —
-`generate_voice()`, `generate_sfx()`, `generate_music()` — rather than one generic
-`generate_audio(...)` with ambiguous parameters, since the three workloads (TTS,
+Same shape for `VideoProvider`. `AudioProvider` follows the identical async
+`submit → poll → get_result` lifecycle, but splits `submit` into three explicit
+methods — `submit_voice()`, `submit_sfx()`, `submit_music()` — rather than one
+generic `submit(request)` with ambiguous parameters, since the three workloads (TTS,
 sound-effect synthesis, music generation) have genuinely different request shapes.
+The methods differ; the lifecycle does not — `AudioProvider` is not an exception to
+the async-job principle:
+
+```python
+class AudioProvider(Protocol):
+    def submit_voice(self, request: VoiceGenerationRequest) -> GenerationJob: ...
+    def submit_sfx(self, request: SfxGenerationRequest) -> GenerationJob: ...
+    def submit_music(self, request: MusicGenerationRequest) -> GenerationJob: ...
+    def poll(self, job: GenerationJob) -> JobStatus: ...
+    def get_result(self, job: GenerationJob) -> AudioGenerationResult: ...
+```
 
 v1 implementations: `FalImageProvider`, `FalVideoProvider`, `FalAudioProvider` (calling
 fal.ai's REST/SDK directly with `FAL_KEY` — no MCP dependency), and `Mock*Provider`
@@ -235,30 +285,45 @@ retries/cancellation/parallelism/resumability to work uniformly across stages.
 
 Paid generation is refused by the **service layer**, not merely discouraged by agent
 instructions — an agent cannot accidentally or intentionally bypass it. `config.json`
-carries an approval record:
+is organized into separate top-level sections so provider choice, runtime tuning, and
+approval state never get muddled together:
 
 ```json
 {
-  "providers": { "image": {"provider": "fal", "model": "nano-banana", "parameters": {}},
-                 "video": {"provider": "fal", "model": "veo-3", "parameters": {}} },
+  "providers": {
+    "image": {"provider": "fal", "model": "nano-banana", "parameters": {}},
+    "video": {"provider": "fal", "model": "veo-3", "parameters": {}}
+  },
+  "generation": {
+    "max_attempts": 3,
+    "max_parallel_jobs": 3,
+    "poll_interval_seconds": 5
+  },
+  "render": {},
   "generation_approval": {
     "approved": false,
     "approved_at": null,
     "scope": "current_storyboard",
     "estimated_cost": null
-  },
-  "max_attempts": 3,
-  "max_parallel_jobs": 3
+  }
 }
 ```
 
 Flow: once Storyboard + Continuity pass, the Director agent computes a cost estimate
 across all pending shots and calls `ai-film approve-generation --scope current_storyboard`
 (prompting the user for confirmation first). This writes `generation_approval.approved
-= true` with a timestamp and cost snapshot. Any `ai-film generate-*` call checks this
-flag in the service layer and refuses with a clear error if approval is missing or the
-scope doesn't cover the requested shots. Approval is scoped, not global — adding new
-shots later requires re-approval for the new scope.
+= true` with a timestamp and cost snapshot into `config.json`. Any `ai-film generate-*`
+call checks this flag in the service layer and refuses with a clear error if approval
+is missing or the scope doesn't cover the requested shots. Approval is scoped, not
+global — adding new shots later requires re-approval for the new scope.
+
+**`config.json` is user-editable and therefore not tamper-proof** — someone could hand-edit
+`"approved": true`. v1 does not need cryptographic signing, but `approve-generation`
+must also append an immutable record to `99_logs/approvals/<timestamp>_generation_approved.json`
+(scope, cost estimate, shot IDs covered, timestamp). `config.json` reflects *current*
+approval state; `99_logs/approvals/` is the proof that an approval event actually
+happened — the same current-state/immutable-history split as `shot.json` vs.
+`99_logs/` in general (§2).
 
 ## 7. Model Switching Semantics
 
@@ -279,12 +344,35 @@ an accurate historical record of what was actually generated with what.
 
 ## 8. Agent Pipeline
 
+The approval checkpoint is an explicit stage in the pipeline, not something each
+generation agent independently decides to respect:
+
+```
+Director → Bibles → Storyboard → Continuity
+                                      │
+                              ──────────────
+                              💰 COST GATE
+                        (ai-film approve-generation)
+                              ──────────────
+                                      │
+                    Image / Video / Voice / Sfx / Music
+                                      │
+                                   Editor
+                                      │
+                                  final.mp4
+```
+
+No agent downstream of Continuity is permitted to call `generate-*` until
+`generation_approval.approved` is true for its shots' scope — enforced by the service
+layer (§6), not by agent instructions.
+
 | Agent | Reads | Writes | Role |
 |---|---|---|---|
-| Director | user prompt | `00_story/`, scene list | logline, 3-act structure, scene breakdown |
+| Director | user prompt | `00_story/`, scene list | logline, 3-act structure, scene breakdown; computes cost estimate and drives the approval checkpoint |
 | Character/Environment/Style | `00_story/` | `01_bibles/`, `assets/*/reference.png` | character/environment/style bibles + reference images (via Image provider) |
 | Storyboard | `00_story/`, `01_bibles/` | `03_shots/SH*.json` | drafts the shot list — the contract |
 | Continuity | `03_shots/*.json`, `01_bibles/` | `shot.json["continuity"]` | text/spec-level consistency check across all shots |
+| *(approval checkpoint — see above)* | | | |
 | Image | `shot.json` (approved) | `04_storyboard/`, `generation.image` | calls `ai-film generate-image` |
 | Video | `shot.json` (approved) | `05_video/`, `generation.video` | calls `ai-film generate-video` |
 | Voice/Sound | `shot.json` (approved) | `06_audio/`, `generation.voice`/`sfx`/`music` | calls `ai-film generate-voice`/`-sfx`/`-music` |
@@ -305,8 +393,22 @@ an accurate historical record of what was actually generated with what.
 ## 10. Error Handling, Retries, Concurrency
 
 - Every provider call goes through the service layer: submit → poll with backoff → on
-  failure, log full request/response to `99_logs/`, increment `attempts`, retry up to
+  failure, log the request/response to `99_logs/`, increment `attempts`, retry up to
   `max_attempts` (default 3, config-controlled).
+- Logs are organized per shot, per attempt, so debugging a single shot doesn't
+  require scanning a flat log stream:
+  ```
+  99_logs/
+  ├── SH007/
+  │   ├── 20260818T210000_image_attempt01.json
+  │   └── 20260818T210130_image_attempt02.json
+  └── approvals/
+      └── 20260818T205000_generation_approved.json
+  ```
+- **Logs must redact secrets before persistence** — API keys, `Authorization`
+  headers, signed/temporary download URLs, and any other credential-shaped values are
+  replaced with `"[REDACTED]"` before a request/response payload is written to disk.
+  This applies uniformly across all provider backends, not case-by-case.
 - Exhausted retries set that stage's `status` to `failed` — the pipeline stops or
   flags rather than assembling a final video silently missing shots.
 - `ai-film status` reports pending/failed shots across the project for triage: retry,
@@ -349,6 +451,7 @@ from shot order. This keeps the render step debuggable in isolation from generat
 ✓ shot.json validates against schema
 ✓ continuity check passes
 ✓ cost gate blocks generation until approved, then unblocks after approval
+✓ approval event recorded immutably under 99_logs/approvals/
 ✓ provider job submits
 ✓ job completes
 ✓ artifact exists on disk
@@ -373,3 +476,9 @@ from shot order. This keeps the render step debuggable in isolation from generat
 - VideoDB as an optional alternate editing backend alongside FFmpeg/Remotion.
 - Vision-based continuity checking (comparing actual generated frames, not just specs).
 - Timeline-level shot placement (`timing.start`) for non-linear editing.
+- `04_storyboard/SH001.png` may later become `04_storyboard/SH001/frame.png` to hold
+  multiple related images per shot (storyboard draft, keyframe, reference variants).
+  The flat structure is sufficient for v1 and requires no `shot.json` schema change
+  to migrate later, since `generation.image.artifact.path` is already an explicit
+  path rather than an inferred convention.
+- Full `sha256` artifact integrity verification (currently optional/`null` in v1).
