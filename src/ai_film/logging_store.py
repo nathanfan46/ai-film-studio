@@ -24,7 +24,7 @@ def redact(value: Any) -> Any:
 
 
 def _timestamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
 
 
 def write_attempt_log(
