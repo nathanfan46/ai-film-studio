@@ -45,8 +45,8 @@ def approve_generation(
         "scope": scope_record,
         "estimated_cost": estimated_cost,
     }
-    save_config(project_dir, config)
     write_approval_log(project_dir, scope, list(target_ids), estimated_cost)
+    save_config(project_dir, config)
     return config["generation_approval"][scope]
 
 
