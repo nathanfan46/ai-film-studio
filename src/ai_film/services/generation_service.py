@@ -1,0 +1,257 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Callable, TypeVar
+
+from ai_film.errors import CostGateError, ProviderError
+from ai_film.approval import is_approved
+from ai_film.jobs import run_job
+from ai_film.logging_store import write_attempt_log
+from ai_film.models import (
+    GenerationJob,
+    ImageGenerationRequest,
+    JobStatus,
+    MusicGenerationRequest,
+    SfxGenerationRequest,
+    VideoGenerationRequest,
+    VoiceGenerationRequest,
+)
+from ai_film.shot_store import load_shot, save_shot
+
+T = TypeVar("T")
+
+_SCOPE_BY_STAGE = {
+    "image": "storyboard",
+    "video": "storyboard",
+    "voice": "storyboard",
+    "sfx": "storyboard",
+    "music": "storyboard",
+}
+
+
+def run_generation_stage(
+    project_dir: Path,
+    shot_path: Path,
+    stage: str,
+    scope: str,
+    submit_fn: Callable[[], GenerationJob],
+    poll_fn: Callable[[GenerationJob], JobStatus],
+    get_result_fn: Callable[[GenerationJob], T],
+    result_to_artifact: Callable[[T], dict],
+    provider_name: str,
+    model_name: str,
+    max_attempts: int = 3,
+    poll_interval_seconds: float = 0.0,
+    force: bool = False,
+) -> dict:
+    shot = load_shot(shot_path)
+    shot_id = shot["id"]
+
+    if not is_approved(project_dir, scope, shot_id):
+        raise CostGateError(
+            f"shot {shot_id} is not approved for generation (scope={scope}); "
+            f"run `ai-film approve-generation --scope {scope} --targets {shot_id},...` first"
+        )
+
+    stage_data = shot["generation"].get(stage, {"status": "pending", "attempts": 0})
+    if stage_data.get("status") == "completed" and not force:
+        return stage_data
+
+    def on_attempt(attempt: int, job: GenerationJob | None, outcome: str) -> None:
+        write_attempt_log(
+            project_dir,
+            shot_id,
+            stage,
+            attempt,
+            job={"provider": job.provider, "id": job.id} if job else None,
+            request={"provider": provider_name, "model": model_name},
+            response={"outcome": outcome},
+            outcome=outcome,
+        )
+
+    try:
+        job_result = run_job(
+            submit_fn=submit_fn,
+            poll_fn=poll_fn,
+            get_result_fn=get_result_fn,
+            max_attempts=max_attempts,
+            poll_interval_seconds=poll_interval_seconds,
+            on_attempt=on_attempt,
+        )
+    except ProviderError:
+        shot["generation"][stage] = {
+            **stage_data,
+            "provider": provider_name,
+            "model": model_name,
+            "status": "failed",
+            "attempts": max_attempts,
+        }
+        save_shot(shot_path, shot)
+        raise
+
+    artifact = result_to_artifact(job_result.result)
+    shot["generation"][stage] = {
+        "provider": provider_name,
+        "model": model_name,
+        "status": "completed",
+        "job": {"provider": job_result.job.provider, "id": job_result.job.id},
+        "inputs": stage_data.get("inputs", []),
+        "artifact": artifact,
+        "attempts": job_result.attempts,
+    }
+    save_shot(shot_path, shot)
+    return shot["generation"][stage]
+
+
+def _image_artifact(result) -> dict:
+    return {"path": result.artifact_path, "size_bytes": result.size_bytes, "sha256": None}
+
+
+def _video_or_audio_artifact(result) -> dict:
+    return {
+        "path": result.artifact_path,
+        "size_bytes": result.size_bytes,
+        "sha256": None,
+        "duration_seconds": result.duration_seconds,
+    }
+
+
+def generate_image(
+    project_dir: Path,
+    shot_path: Path,
+    provider,
+    prompt: str,
+    model: str,
+    reference_paths: list[str],
+    output_path: Path,
+    provider_name: str,
+    max_attempts: int = 3,
+    poll_interval_seconds: float = 0.0,
+    force: bool = False,
+) -> dict:
+    request = ImageGenerationRequest(
+        prompt=prompt, model=model, reference_paths=reference_paths,
+        output_path=str(output_path),
+    )
+    return run_generation_stage(
+        project_dir=project_dir, shot_path=shot_path, stage="image",
+        scope=_SCOPE_BY_STAGE["image"],
+        submit_fn=lambda: provider.submit(request),
+        poll_fn=provider.poll, get_result_fn=provider.get_result,
+        result_to_artifact=_image_artifact,
+        provider_name=provider_name, model_name=model,
+        max_attempts=max_attempts, poll_interval_seconds=poll_interval_seconds,
+        force=force,
+    )
+
+
+def generate_video(
+    project_dir: Path,
+    shot_path: Path,
+    provider,
+    prompt: str,
+    model: str,
+    reference_paths: list[str],
+    duration_seconds: float,
+    output_path: Path,
+    provider_name: str,
+    max_attempts: int = 3,
+    poll_interval_seconds: float = 0.0,
+    force: bool = False,
+) -> dict:
+    request = VideoGenerationRequest(
+        prompt=prompt, model=model, reference_paths=reference_paths,
+        duration_seconds=duration_seconds, output_path=str(output_path),
+    )
+    return run_generation_stage(
+        project_dir=project_dir, shot_path=shot_path, stage="video",
+        scope=_SCOPE_BY_STAGE["video"],
+        submit_fn=lambda: provider.submit(request),
+        poll_fn=provider.poll, get_result_fn=provider.get_result,
+        result_to_artifact=_video_or_audio_artifact,
+        provider_name=provider_name, model_name=model,
+        max_attempts=max_attempts, poll_interval_seconds=poll_interval_seconds,
+        force=force,
+    )
+
+
+def generate_voice(
+    project_dir: Path,
+    shot_path: Path,
+    provider,
+    text: str,
+    model: str,
+    speaker: str,
+    output_path: Path,
+    provider_name: str,
+    max_attempts: int = 3,
+    poll_interval_seconds: float = 0.0,
+    force: bool = False,
+) -> dict:
+    request = VoiceGenerationRequest(
+        text=text, model=model, speaker=speaker, output_path=str(output_path)
+    )
+    return run_generation_stage(
+        project_dir=project_dir, shot_path=shot_path, stage="voice",
+        scope=_SCOPE_BY_STAGE["voice"],
+        submit_fn=lambda: provider.submit_voice(request),
+        poll_fn=provider.poll, get_result_fn=provider.get_result,
+        result_to_artifact=_video_or_audio_artifact,
+        provider_name=provider_name, model_name=model,
+        max_attempts=max_attempts, poll_interval_seconds=poll_interval_seconds,
+        force=force,
+    )
+
+
+def generate_sfx(
+    project_dir: Path,
+    shot_path: Path,
+    provider,
+    prompt: str,
+    model: str,
+    output_path: Path,
+    provider_name: str,
+    max_attempts: int = 3,
+    poll_interval_seconds: float = 0.0,
+    force: bool = False,
+) -> dict:
+    request = SfxGenerationRequest(prompt=prompt, model=model, output_path=str(output_path))
+    return run_generation_stage(
+        project_dir=project_dir, shot_path=shot_path, stage="sfx",
+        scope=_SCOPE_BY_STAGE["sfx"],
+        submit_fn=lambda: provider.submit_sfx(request),
+        poll_fn=provider.poll, get_result_fn=provider.get_result,
+        result_to_artifact=_video_or_audio_artifact,
+        provider_name=provider_name, model_name=model,
+        max_attempts=max_attempts, poll_interval_seconds=poll_interval_seconds,
+        force=force,
+    )
+
+
+def generate_music(
+    project_dir: Path,
+    shot_path: Path,
+    provider,
+    prompt: str,
+    model: str,
+    duration_seconds: float,
+    output_path: Path,
+    provider_name: str,
+    max_attempts: int = 3,
+    poll_interval_seconds: float = 0.0,
+    force: bool = False,
+) -> dict:
+    request = MusicGenerationRequest(
+        prompt=prompt, model=model, duration_seconds=duration_seconds,
+        output_path=str(output_path),
+    )
+    return run_generation_stage(
+        project_dir=project_dir, shot_path=shot_path, stage="music",
+        scope=_SCOPE_BY_STAGE["music"],
+        submit_fn=lambda: provider.submit_music(request),
+        poll_fn=provider.poll, get_result_fn=provider.get_result,
+        result_to_artifact=_video_or_audio_artifact,
+        provider_name=provider_name, model_name=model,
+        max_attempts=max_attempts, poll_interval_seconds=poll_interval_seconds,
+        force=force,
+    )
