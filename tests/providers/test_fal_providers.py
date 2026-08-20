@@ -1,7 +1,15 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from ai_film.models import Capability, ImageGenerationRequest, JobStatus
+from ai_film.models import (
+    Capability,
+    ImageGenerationRequest,
+    JobStatus,
+    MusicGenerationRequest,
+    SfxGenerationRequest,
+    VoiceGenerationRequest,
+)
+from ai_film.providers.fal.audio import FalAudioProvider
 from ai_film.providers.fal.catalog import FalProviderCatalog
 from ai_film.providers.fal.image import FalImageProvider
 
@@ -45,6 +53,55 @@ def test_fal_image_provider_full_lifecycle(mock_requests, tmp_path: Path, monkey
     result = provider.get_result(job)
     assert result.artifact_path == str(output_path)
     assert output_path.read_bytes() == b"PNG-BYTES"
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_fal_audio_provider_tags_each_submit_with_its_own_capability(
+    mock_requests, tmp_path: Path, monkeypatch
+):
+    monkeypatch.setenv("FAL_KEY", "test-key")
+
+    def submit_response(request_id: str) -> MagicMock:
+        response = MagicMock(status_code=200)
+        response.json.return_value = {
+            "request_id": request_id,
+            "status_url": f"https://queue.fal.run/status/{request_id}",
+            "response_url": f"https://queue.fal.run/result/{request_id}",
+        }
+        return response
+
+    mock_requests.post.side_effect = [
+        submit_response("req-voice"),
+        submit_response("req-sfx"),
+        submit_response("req-music"),
+    ]
+
+    provider = FalAudioProvider()
+
+    voice_job = provider.submit_voice(
+        VoiceGenerationRequest(
+            text="hello", model="csm-1b", output_path=str(tmp_path / "voice.wav")
+        )
+    )
+    sfx_job = provider.submit_sfx(
+        SfxGenerationRequest(
+            prompt="door creak", model="thinksound", output_path=str(tmp_path / "sfx.wav")
+        )
+    )
+    music_job = provider.submit_music(
+        MusicGenerationRequest(
+            prompt="tense strings", model="csm-1b", output_path=str(tmp_path / "music.wav")
+        )
+    )
+
+    assert voice_job.capability == Capability.VOICE
+    assert sfx_job.capability == Capability.SFX
+    assert music_job.capability == Capability.MUSIC
+    assert {voice_job.capability, sfx_job.capability, music_job.capability} == {
+        Capability.VOICE,
+        Capability.SFX,
+        Capability.MUSIC,
+    }
 
 
 @patch("ai_film.providers.fal.client.requests")
