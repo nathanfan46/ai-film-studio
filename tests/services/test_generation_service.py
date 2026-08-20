@@ -39,17 +39,19 @@ def _shot_path(project_dir: Path, shot_id: str = "S01_SH01") -> Path:
 def test_generate_image_blocked_without_approval(tmp_path: Path):
     project_dir = _project(tmp_path)
     shot_path = _shot_path(project_dir)
+    provider = MockImageProvider()
     with pytest.raises(CostGateError):
         generate_image(
             project_dir=project_dir,
             shot_path=shot_path,
-            provider=MockImageProvider(),
+            provider=provider,
             prompt="a girl in a corridor",
             model="nano-banana",
             reference_paths=[],
             output_path=project_dir / "04_storyboard" / "S01_SH01.png",
             provider_name="mock",
         )
+    assert provider._submit_calls == 0
 
 
 def test_generate_image_succeeds_once_approved(tmp_path: Path):
