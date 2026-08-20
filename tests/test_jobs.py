@@ -68,3 +68,27 @@ def test_run_job_calls_on_attempt_for_each_try():
     )
     assert len(log) == 3
     assert log[-1][1] == "completed"
+
+
+def test_run_job_retries_on_failed_poll_status():
+    submit_count = {"n": 0}
+
+    def submit_fn():
+        submit_count["n"] += 1
+        return _job()
+
+    def poll_fn(job):
+        # Always return FAILED to trigger retry
+        return JobStatus.FAILED
+
+    with pytest.raises(ProviderError) as exc_info:
+        run_job(
+            submit_fn=submit_fn,
+            poll_fn=poll_fn,
+            get_result_fn=lambda job: "artifact",
+            max_attempts=3,
+        )
+    # Verify it retried (called submit_fn 3 times)
+    assert submit_count["n"] == 3
+    # Verify error message indicates job failure
+    assert "job ended with status" in str(exc_info.value)
