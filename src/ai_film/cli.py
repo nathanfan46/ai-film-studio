@@ -8,6 +8,7 @@ import typer
 
 from ai_film import __version__
 from ai_film.approval import approve_generation as approve_generation_service
+from ai_film.batch import run_bounded
 from ai_film.errors import CostGateError, ProviderError
 from ai_film.models import Capability
 from ai_film.project import init_project
@@ -272,6 +273,79 @@ def render_cmd(path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path")) -> Non
             typer.echo(f"  - {error}", err=True)
         raise typer.Exit(code=1)
     typer.echo(f"rendered {output_path}")
+
+
+_BATCH_SERVICE_BY_STAGE = {
+    "image": (Capability.IMAGE, generate_image_service),
+    "video": (Capability.VIDEO, generate_video_service),
+    "voice": (Capability.VOICE, generate_voice_service),
+}
+
+
+def _build_stage_call(path: Path, shot_id: str, stage: str, force: bool):
+    capability, service_fn = _BATCH_SERVICE_BY_STAGE[stage]
+    stage_config, gen_config = _stage_config(path, stage)
+    shot_path = path / "03_shots" / f"{shot_id}.json"
+    shot_data = load_shot(shot_path)
+    provider = resolve_provider(capability, stage_config["provider"])
+    references = [c["reference"] for c in shot_data.get("characters", []) if c.get("reference")]
+
+    if stage == "image":
+        return lambda: service_fn(
+            project_dir=path, shot_path=shot_path, provider=provider,
+            prompt=build_image_prompt(shot_data), model=stage_config["model"],
+            reference_paths=references, output_path=path / "04_storyboard" / f"{shot_id}.png",
+            provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
+            poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
+        )
+    if stage == "video":
+        return lambda: service_fn(
+            project_dir=path, shot_path=shot_path, provider=provider,
+            prompt=build_video_prompt(shot_data), model=stage_config["model"],
+            reference_paths=references, duration_seconds=shot_data["duration_seconds"],
+            output_path=path / "05_video" / f"{shot_id}.mp4",
+            provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
+            poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
+        )
+    dialogue = shot_data.get("dialogue", {})
+    return lambda: service_fn(
+        project_dir=path, shot_path=shot_path, provider=provider,
+        text=dialogue.get("text", ""), model=stage_config["model"],
+        speaker=dialogue.get("speaker", ""),
+        output_path=path / "06_audio" / "dialogue" / f"{shot_id}.wav",
+        provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
+        poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
+    )
+
+
+@app.command(name="generate-all")
+def generate_all_cmd(
+    stage: str = typer.Option(..., "--stage", help="image|video|voice"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Generate `stage` for every shot, bounded by config.generation.max_parallel_jobs."""
+    if stage not in _BATCH_SERVICE_BY_STAGE:
+        typer.echo(
+            f"generate-all supports stage in {sorted(_BATCH_SERVICE_BY_STAGE)}, got {stage!r}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    _, gen_config = _stage_config(path, stage)
+    shot_ids = [p.stem for p in sorted((path / "03_shots").glob("*.json"))]
+    calls = [_build_stage_call(path, shot_id, stage, force) for shot_id in shot_ids]
+    results = run_bounded(calls, max_workers=gen_config["max_parallel_jobs"])
+
+    failed_ids = {shot_id for shot_id, error in zip(shot_ids, results) if error is not None}
+    for shot_id in shot_ids:
+        status = "FAILED" if shot_id in failed_ids else "done"
+        typer.echo(f"{shot_id}: {stage} {status}")
+    if failed_ids:
+        for shot_id, error in zip(shot_ids, results):
+            if error is not None:
+                typer.echo(f"  {shot_id}: {error}", err=True)
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":
