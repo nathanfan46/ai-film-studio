@@ -89,7 +89,7 @@ def _stage_config(path: Path, stage: str) -> dict:
     return config["providers"][stage], config["generation"]
 
 
-def _run_generation(capability: Capability, stage: str, run_fn) -> None:
+def _run_generation(shot_id: str, stage_name: str, run_fn) -> None:
     try:
         result = run_fn()
     except CostGateError as exc:
@@ -98,7 +98,10 @@ def _run_generation(capability: Capability, stage: str, run_fn) -> None:
     except ProviderError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
-    typer.echo(f"{stage}: {result['status']}")
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"{shot_id}: {stage_name} {result['status']}")
 
 
 @app.command(name="generate-image")
@@ -110,18 +113,19 @@ def generate_image_cmd(
     stage_config, gen_config = _stage_config(path, "image")
     shot_path = path / "03_shots" / f"{shot}.json"
     shot_data = load_shot(shot_path)
-    provider = resolve_provider(Capability.IMAGE, stage_config["provider"])
     references = [c["reference"] for c in shot_data.get("characters", []) if c.get("reference")]
-    _run_generation(
-        Capability.IMAGE, shot,
-        lambda: generate_image_service(
+
+    def _run():
+        provider = resolve_provider(Capability.IMAGE, stage_config["provider"])
+        return generate_image_service(
             project_dir=path, shot_path=shot_path, provider=provider,
             prompt=build_image_prompt(shot_data), model=stage_config["model"],
             reference_paths=references, output_path=path / "04_storyboard" / f"{shot}.png",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
-        ),
-    )
+        )
+
+    _run_generation(shot, "image", _run)
 
 
 @app.command(name="generate-video")
@@ -133,19 +137,20 @@ def generate_video_cmd(
     stage_config, gen_config = _stage_config(path, "video")
     shot_path = path / "03_shots" / f"{shot}.json"
     shot_data = load_shot(shot_path)
-    provider = resolve_provider(Capability.VIDEO, stage_config["provider"])
     references = [c["reference"] for c in shot_data.get("characters", []) if c.get("reference")]
-    _run_generation(
-        Capability.VIDEO, shot,
-        lambda: generate_video_service(
+
+    def _run():
+        provider = resolve_provider(Capability.VIDEO, stage_config["provider"])
+        return generate_video_service(
             project_dir=path, shot_path=shot_path, provider=provider,
             prompt=build_video_prompt(shot_data), model=stage_config["model"],
             reference_paths=references, duration_seconds=shot_data["duration_seconds"],
             output_path=path / "05_video" / f"{shot}.mp4",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
-        ),
-    )
+        )
+
+    _run_generation(shot, "video", _run)
 
 
 @app.command(name="generate-voice")
@@ -158,18 +163,19 @@ def generate_voice_cmd(
     shot_path = path / "03_shots" / f"{shot}.json"
     shot_data = load_shot(shot_path)
     dialogue = shot_data.get("dialogue", {})
-    provider = resolve_provider(Capability.VOICE, stage_config["provider"])
-    _run_generation(
-        Capability.VOICE, shot,
-        lambda: generate_voice_service(
+
+    def _run():
+        provider = resolve_provider(Capability.VOICE, stage_config["provider"])
+        return generate_voice_service(
             project_dir=path, shot_path=shot_path, provider=provider,
             text=dialogue.get("text", ""), model=stage_config["model"],
             speaker=dialogue.get("speaker", ""),
             output_path=path / "06_audio" / "dialogue" / f"{shot}.wav",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
-        ),
-    )
+        )
+
+    _run_generation(shot, "voice", _run)
 
 
 @app.command(name="generate-sfx")
@@ -181,17 +187,18 @@ def generate_sfx_cmd(
 ) -> None:
     stage_config, gen_config = _stage_config(path, "sfx")
     shot_path = path / "03_shots" / f"{shot}.json"
-    provider = resolve_provider(Capability.SFX, stage_config["provider"])
-    _run_generation(
-        Capability.SFX, shot,
-        lambda: generate_sfx_service(
+
+    def _run():
+        provider = resolve_provider(Capability.SFX, stage_config["provider"])
+        return generate_sfx_service(
             project_dir=path, shot_path=shot_path, provider=provider,
             prompt=prompt, model=stage_config["model"],
             output_path=path / "06_audio" / "sfx" / f"{shot}.wav",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
-        ),
-    )
+        )
+
+    _run_generation(shot, "sfx", _run)
 
 
 @app.command(name="generate-music")
@@ -204,17 +211,18 @@ def generate_music_cmd(
 ) -> None:
     stage_config, gen_config = _stage_config(path, "music")
     shot_path = path / "03_shots" / f"{shot}.json"
-    provider = resolve_provider(Capability.MUSIC, stage_config["provider"])
-    _run_generation(
-        Capability.MUSIC, shot,
-        lambda: generate_music_service(
+
+    def _run():
+        provider = resolve_provider(Capability.MUSIC, stage_config["provider"])
+        return generate_music_service(
             project_dir=path, shot_path=shot_path, provider=provider,
             prompt=prompt, model=stage_config["model"], duration_seconds=duration_seconds,
             output_path=path / "06_audio" / "music" / f"{shot}.wav",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
-        ),
-    )
+        )
+
+    _run_generation(shot, "music", _run)
 
 
 @app.command(name="check-continuity")

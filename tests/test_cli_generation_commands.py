@@ -52,18 +52,93 @@ def test_generate_image_blocked_without_approval(tmp_path: Path):
     assert result.exit_code == 1
 
 
-def test_generate_image_succeeds_after_approval(tmp_path: Path):
-    project_dir = _init_mock_project(tmp_path)
+def _approve(project_dir: Path, shot_id: str = "S01_SH01") -> None:
     runner.invoke(
         app,
-        ["approve-generation", "--scope", "storyboard", "--targets", "S01_SH01", "--path", str(project_dir)],
+        ["approve-generation", "--scope", "storyboard", "--targets", shot_id, "--path", str(project_dir)],
     )
+
+
+def test_generate_image_succeeds_after_approval(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    _approve(project_dir)
     result = runner.invoke(
         app, ["generate-image", "--shot", "S01_SH01", "--path", str(project_dir)]
     )
     assert result.exit_code == 0
     assert "completed" in result.output
     assert (project_dir / "04_storyboard" / "S01_SH01.png").exists()
+
+
+def test_generate_image_rejects_unknown_provider_name(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    config = json.loads((project_dir / "config.json").read_text())
+    config["providers"]["image"]["provider"] = "not-a-real-provider"
+    (project_dir / "config.json").write_text(json.dumps(config))
+    _approve(project_dir)
+
+    result = runner.invoke(
+        app, ["generate-image", "--shot", "S01_SH01", "--path", str(project_dir)]
+    )
+
+    assert result.exit_code == 1
+    assert result.output.strip() != ""
+    assert "not-a-real-provider" in result.output
+    # No uncaught exception should propagate out of the command — resolve_provider's
+    # ValueError must be caught and turned into a clean typer.Exit(1), not a traceback.
+    assert not isinstance(result.exception, ValueError)
+
+
+def test_generate_video_succeeds_after_approval(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    _approve(project_dir)
+    result = runner.invoke(
+        app, ["generate-video", "--shot", "S01_SH01", "--path", str(project_dir)]
+    )
+    assert result.exit_code == 0
+    assert "completed" in result.output
+    assert (project_dir / "05_video" / "S01_SH01.mp4").exists()
+
+
+def test_generate_voice_succeeds_after_approval(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    _approve(project_dir)
+    result = runner.invoke(
+        app, ["generate-voice", "--shot", "S01_SH01", "--path", str(project_dir)]
+    )
+    assert result.exit_code == 0
+    assert "completed" in result.output
+    assert (project_dir / "06_audio" / "dialogue" / "S01_SH01.wav").exists()
+
+
+def test_generate_sfx_succeeds_after_approval(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    _approve(project_dir)
+    result = runner.invoke(
+        app,
+        [
+            "generate-sfx", "--shot", "S01_SH01", "--prompt", "distant thunder rumble",
+            "--path", str(project_dir),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "completed" in result.output
+    assert (project_dir / "06_audio" / "sfx" / "S01_SH01.wav").exists()
+
+
+def test_generate_music_succeeds_after_approval(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    _approve(project_dir)
+    result = runner.invoke(
+        app,
+        [
+            "generate-music", "--shot", "S01_SH01", "--prompt", "tense low strings",
+            "--path", str(project_dir),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "completed" in result.output
+    assert (project_dir / "06_audio" / "music" / "S01_SH01.wav").exists()
 
 
 def test_check_continuity_updates_shot(tmp_path: Path):
