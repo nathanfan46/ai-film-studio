@@ -1,0 +1,110 @@
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from ai_film.cli import app
+from ai_film.shot_store import load_shot, save_shot
+
+runner = CliRunner()
+
+
+def _shot(shot_id: str) -> dict:
+    return {
+        "schema_version": "1.0",
+        "id": shot_id,
+        "status": "draft",
+        "duration_seconds": 2,
+        "continuity": {"status": "pending", "checked_at": None, "issues": []},
+        "action": "girl steps out of darkness",
+        "visual": {"style": "cinematic sci-fi"},
+        "camera": {"shot": "close_up", "movement": "slow_push_in"},
+        "characters": [],
+        "generation": {
+            "image": {"status": "pending", "attempts": 0},
+            "video": {"status": "pending", "attempts": 0},
+            "voice": {"status": "not_required"},
+            "sfx": {"status": "not_required"},
+            "music": {"status": "not_required"},
+        },
+    }
+
+
+def _init_mock_project(tmp_path: Path) -> Path:
+    project_dir = tmp_path / "project"
+    runner.invoke(app, ["init", "Test Film", "--path", str(project_dir)])
+    config = json.loads((project_dir / "config.json").read_text())
+    for stage in config["providers"]:
+        config["providers"][stage]["provider"] = "mock"
+    (project_dir / "config.json").write_text(json.dumps(config))
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", _shot("S01_SH01"))
+    return project_dir
+
+
+def test_generate_image_blocked_without_approval(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    result = runner.invoke(
+        app, ["generate-image", "--shot", "S01_SH01", "--path", str(project_dir)]
+    )
+    assert result.exit_code == 1
+
+
+def test_generate_image_succeeds_after_approval(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    runner.invoke(
+        app,
+        ["approve-generation", "--scope", "storyboard", "--targets", "S01_SH01", "--path", str(project_dir)],
+    )
+    result = runner.invoke(
+        app, ["generate-image", "--shot", "S01_SH01", "--path", str(project_dir)]
+    )
+    assert result.exit_code == 0
+    assert "completed" in result.output
+    assert (project_dir / "04_storyboard" / "S01_SH01.png").exists()
+
+
+def test_check_continuity_updates_shot(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "check-continuity", "--shot", "S01_SH01", "--status", "passed",
+            "--path", str(project_dir),
+        ],
+    )
+    assert result.exit_code == 0
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    assert shot["continuity"]["status"] == "passed"
+
+
+def test_check_continuity_records_issues(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    runner.invoke(
+        app,
+        [
+            "check-continuity", "--shot", "S01_SH01", "--status", "failed",
+            "--issue", "jacket color mismatch", "--path", str(project_dir),
+        ],
+    )
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    assert shot["continuity"]["issues"] == ["jacket color mismatch"]
+
+
+def test_approve_generation_rejects_unknown_scope(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    result = runner.invoke(
+        app,
+        ["approve-generation", "--scope", "bogus", "--targets", "S01_SH01", "--path", str(project_dir)],
+    )
+    assert result.exit_code == 1
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_render_reports_preflight_failure_when_no_shots_generated(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    result = runner.invoke(app, ["render", "--path", str(project_dir)])
+    assert result.exit_code == 1
+    assert "preflight" in result.output.lower()
