@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -50,8 +51,13 @@ def models_cmd(
     capability: str = typer.Option(..., "--capability", help="image|video|voice|sfx|music"),
 ) -> None:
     """List the provider/model catalog for a capability (v1: fal.ai only)."""
+    try:
+        capability_enum = Capability(capability)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
     catalog = FalProviderCatalog()
-    for model in catalog.models(Capability(capability)):
+    for model in catalog.models(capability_enum):
         typer.echo(f"{model.provider}/{model.model}  {model.display_name}")
 
 
@@ -241,7 +247,11 @@ def check_continuity_cmd(
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "issues": list(issue),
     }
-    save_shot(shot_path, shot_data)
+    try:
+        save_shot(shot_path, shot_data)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
     typer.echo(f"{shot}: continuity {status}")
 
 
@@ -271,6 +281,9 @@ def render_cmd(path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path")) -> Non
         typer.echo("render preflight failed:", err=True)
         for error in exc.errors:
             typer.echo(f"  - {error}", err=True)
+        raise typer.Exit(code=1)
+    except (RuntimeError, subprocess.CalledProcessError) as exc:
+        typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
     typer.echo(f"rendered {output_path}")
 

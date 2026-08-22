@@ -183,3 +183,60 @@ def test_render_reports_preflight_failure_when_no_shots_generated(tmp_path: Path
     result = runner.invoke(app, ["render", "--path", str(project_dir)])
     assert result.exit_code == 1
     assert "preflight" in result.output.lower()
+
+
+def test_models_rejects_unknown_capability():
+    """Capability('bogus') raises a raw ValueError inside models_cmd; it must be
+    caught and turned into a clean exit 1, not an uncaught traceback."""
+    result = runner.invoke(app, ["models", "--capability", "bogus"])
+    assert result.exit_code == 1
+    assert result.output.strip() != ""
+    assert not isinstance(result.exception, ValueError)
+
+
+def test_check_continuity_rejects_unknown_status(tmp_path: Path):
+    """An invalid --status value fails save_shot's schema validation with a raw
+    ValueError deep inside check_continuity_cmd; it must be caught cleanly."""
+    project_dir = _init_mock_project(tmp_path)
+    result = runner.invoke(
+        app,
+        ["check-continuity", "--shot", "S01_SH01", "--status", "bogus", "--path", str(project_dir)],
+    )
+    assert result.exit_code == 1
+    assert result.output.strip() != ""
+    assert not isinstance(result.exception, ValueError)
+
+
+def test_render_reports_clean_error_when_ffmpeg_missing(tmp_path: Path, monkeypatch):
+    """RuntimeError from render()'s shutil.which(...) check (ffmpeg not on PATH)
+    must be caught by render_cmd, not propagate as an uncaught exception."""
+    project_dir = _init_mock_project(tmp_path)
+    _approve(project_dir)
+    result = runner.invoke(
+        app, ["generate-video", "--shot", "S01_SH01", "--path", str(project_dir)]
+    )
+    assert result.exit_code == 0, result.output
+
+    monkeypatch.setattr("ai_film.render.shutil.which", lambda name: None)
+    result = runner.invoke(app, ["render", "--path", str(project_dir)])
+    assert result.exit_code == 1
+    assert result.output.strip() != ""
+    assert not isinstance(result.exception, RuntimeError)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_render_reports_clean_error_when_ffmpeg_fails(tmp_path: Path):
+    """The mock video provider writes placeholder (non-video) bytes, which pass
+    preflight (file exists, non-empty) but make ffmpeg's concat/copy fail with a
+    CalledProcessError; render_cmd must catch that cleanly, not crash."""
+    project_dir = _init_mock_project(tmp_path)
+    _approve(project_dir)
+    result = runner.invoke(
+        app, ["generate-video", "--shot", "S01_SH01", "--path", str(project_dir)]
+    )
+    assert result.exit_code == 0, result.output
+
+    result = runner.invoke(app, ["render", "--path", str(project_dir)])
+    assert result.exit_code == 1
+    assert result.output.strip() != ""
+    assert not isinstance(result.exception, subprocess.CalledProcessError)
