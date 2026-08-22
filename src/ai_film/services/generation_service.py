@@ -90,6 +90,8 @@ def run_generation_stage(
         raise
 
     artifact = result_to_artifact(job_result.result)
+    if artifact.get("path"):
+        artifact = {**artifact, "path": _project_relative_path(artifact["path"], project_dir)}
     shot["generation"][stage] = {
         "provider": provider_name,
         "model": model_name,
@@ -101,6 +103,22 @@ def run_generation_stage(
     }
     save_shot(shot_path, shot)
     return shot["generation"][stage]
+
+
+def _project_relative_path(path_str: str, project_dir: Path) -> str:
+    """Store artifact paths relative to the project directory.
+
+    Callers build `output_path` as `project_dir / "05_video" / ...`, so the
+    artifact path returned by providers is already project-prefixed. render.py's
+    build_manifest/preflight re-join manifest paths against project_dir a second
+    time, so the value persisted here must be project-relative to avoid a
+    double-joined path (e.g. "project/project/05_video/S01_SH01.mp4").
+    """
+    candidate = Path(path_str)
+    try:
+        return str(candidate.relative_to(project_dir))
+    except ValueError:
+        return path_str
 
 
 def _image_artifact(result) -> dict:

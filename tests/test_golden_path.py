@@ -100,8 +100,12 @@ def test_golden_path_produces_playable_final_video(tmp_path: Path):
     for shot_id in shot_ids:
         shot = load_shot(project_dir / "03_shots" / f"{shot_id}.json")
         video_path = Path(shot["generation"]["video"]["artifact"]["path"])
-        assert video_path.exists()
-        _overwrite_with_real_mp4(project_dir / video_path if not video_path.is_absolute() else video_path)
+        # artifact.path is stored project-relative (see
+        # generation_service._project_relative_path); resolve it against
+        # project_dir before checking existence / overwriting.
+        resolved_video_path = project_dir / video_path if not video_path.is_absolute() else video_path
+        assert resolved_video_path.exists()
+        _overwrite_with_real_mp4(resolved_video_path)
 
     # 8. ai-film status reports all shots completed
     result = runner.invoke(app, ["status", "--path", str(project_dir)])

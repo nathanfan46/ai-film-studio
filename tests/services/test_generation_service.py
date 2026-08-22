@@ -72,7 +72,9 @@ def test_generate_image_succeeds_once_approved(tmp_path: Path):
 
     assert stage["status"] == "completed"
     assert stage["attempts"] == 1
-    assert Path(stage["artifact"]["path"]).exists()
+    # artifact.path is stored project-relative (see generation_service._project_relative_path)
+    assert stage["artifact"]["path"] == "04_storyboard/S01_SH01.png"
+    assert (project_dir / stage["artifact"]["path"]).exists()
 
     shot = load_shot(shot_path)
     assert shot["generation"]["image"]["status"] == "completed"
