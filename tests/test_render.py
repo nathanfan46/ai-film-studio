@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_film.render import RenderPreflightError, build_manifest, preflight, render
+from ai_film.render import RenderPreflightError, _escape_concat_path, build_manifest, preflight, render
 from ai_film.shot_store import save_shot
 
 
@@ -83,6 +83,43 @@ def test_render_raises_preflight_error_when_artifact_missing(tmp_path: Path):
     manifest = build_manifest(tmp_path)
     with pytest.raises(RenderPreflightError):
         render(tmp_path, manifest)
+
+
+def test_render_raises_preflight_error_for_empty_manifest(tmp_path: Path):
+    manifest = {"shots": [], "audio": [], "captions": []}
+    with pytest.raises(RenderPreflightError) as exc_info:
+        render(tmp_path, manifest)
+    assert any("no shots" in e for e in exc_info.value.errors)
+
+
+def test_preflight_reports_error_for_empty_manifest(tmp_path: Path):
+    manifest = {"shots": [], "audio": [], "captions": []}
+    errors = preflight(manifest, tmp_path)
+    assert errors == ["manifest contains no shots to render"]
+
+
+def test_escape_concat_path_escapes_single_quote():
+    escaped = _escape_concat_path(Path("/tmp/it's a dir/S01_SH01.mp4"))
+    assert escaped == "/tmp/it'\\''s a dir/S01_SH01.mp4"
+    # unescaping a shell single-quoted string containing this value should
+    # round-trip back to the original path
+    assert "'" not in escaped.replace("'\\''", "")
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_render_handles_single_quote_in_artifact_path(tmp_path: Path):
+    tricky_name = "S01_SH01's.mp4"
+    _make_tiny_mp4(tmp_path / "05_video" / tricky_name)
+    save_shot(
+        tmp_path / "03_shots" / "S01_SH01.json",
+        _shot("S01_SH01", f"05_video/{tricky_name}"),
+    )
+
+    manifest = build_manifest(tmp_path)
+    output_path = render(tmp_path, manifest)
+
+    assert output_path.exists()
+    assert output_path.stat().st_size > 0
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")

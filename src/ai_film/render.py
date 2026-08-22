@@ -28,6 +28,9 @@ def preflight(manifest: dict, project_dir: Path) -> list[str]:
     shots_dir = project_dir / "03_shots"
     resolved_root = project_dir.resolve()
 
+    if not manifest["shots"]:
+        return ["manifest contains no shots to render"]
+
     for entry in manifest["shots"]:
         shot_id = entry["id"]
         shot_path = shots_dir / f"{shot_id}.json"
@@ -59,6 +62,18 @@ def preflight(manifest: dict, project_dir: Path) -> list[str]:
     return errors
 
 
+def _escape_concat_path(video_path: Path) -> str:
+    """Escape a path for the ffmpeg concat demuxer's quoted-string syntax.
+
+    Per ffmpeg's concat-demuxer escaping rules, a literal single quote inside a
+    single-quoted field is escaped as '\\''  (close quote, escaped quote, reopen
+    quote). Without this, a path containing a single quote would prematurely
+    terminate the quoted string, corrupting or injecting directives into the
+    concat list.
+    """
+    return video_path.as_posix().replace("'", "'\\''")
+
+
 class RenderPreflightError(Exception):
     def __init__(self, errors: list[str]):
         super().__init__("; ".join(errors))
@@ -78,7 +93,7 @@ def render(project_dir: Path, manifest: dict, output_name: str = "reel_001.mp4")
     with concat_list_path.open("w") as handle:
         for entry in manifest["shots"]:
             video_path = (project_dir / entry["video"]).resolve()
-            handle.write(f"file '{video_path.as_posix()}'\n")
+            handle.write(f"file '{_escape_concat_path(video_path)}'\n")
 
     output_path = project_dir / "final" / output_name
     output_path.parent.mkdir(parents=True, exist_ok=True)
