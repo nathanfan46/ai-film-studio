@@ -116,6 +116,9 @@ assets/characters/<name>/
       "model": "nano-banana",
       "prompt": "a girl, cinematic sci-fi style, ...",
       "parent": null,
+      "operation": "generate",
+      "job": {"provider": "fal", "id": "req-abc123"},
+      "estimated_cost": 0.08,
       "created_at": "2026-08-22T10:00:00Z"
     },
     {
@@ -125,6 +128,9 @@ assets/characters/<name>/
       "model": "nano-banana",
       "prompt": "black jacket instead of white",
       "parent": "001",
+      "operation": "edit",
+      "job": {"provider": "fal", "id": "req-def456"},
+      "estimated_cost": 0.02,
       "created_at": "2026-08-22T10:05:00Z"
     }
   ],
@@ -135,11 +141,47 @@ assets/characters/<name>/
 - `target` identifies what this set is for: `character:<name>`, `env:<name>`, or
   `shot:<id>:<stage>` (e.g. `shot:S01_SH01:image`).
 - `parent` is set when a candidate was produced by editing another candidate
-  (via `submit_edit`) rather than generated fresh — this preserves edit lineage
-  so the discussion history is visible, not just the final pick.
+  (via `submit_edit`) rather than generated fresh; `operation` (`"generate"` or
+  `"edit"`) makes that distinction explicit rather than inferring it from
+  whether `parent` is null — this preserves edit lineage so the discussion
+  history is visible, not just the final pick.
+- `job` and `estimated_cost` mirror what `shot.json`'s `generation.<stage>.job`
+  already records (§4/§10 of the core engine spec) — same shape, same
+  provenance discipline, now at candidate granularity instead of only at final-
+  artifact granularity. This is what makes "why did this project cost $X"
+  answerable later, per-candidate, not just per-shot.
 - `selected` holds the chosen candidate's `id` once `select-candidate` runs, or
-  `null` before a pick is made. This field, not any state in `shot.json` or
-  `assets/`, is the source of truth for "has this target been locked yet."
+  `null` before a pick is made. **`selected` is a *current selection*, not a
+  permanent lock** — `select-candidate` can be run again to change the pick
+  (§7), so this field always reflects "what's canonical right now," not history
+  of past picks. A full selection history (who picked what, when, and why, across
+  changes of mind) is deliberately deferred — see §9.
+
+**What `--count N` means, precisely:** one `GenerationJob` (one `submit`/`poll`/
+`get_result` cycle, one provider request) that returns N images, matching
+fal.ai's `num_images` parameter semantics (fal image models already accept
+`num_images: 1-4` in a single call; see the `fal-ai-media` skill reference).
+This is NOT N independent requests. Consequences that follow directly from
+this and must hold in the implementation:
+- All N candidates from one `generate-candidates` call share the same `job.id`
+  and the same `estimated_cost` (the cost of the one request, not N separate
+  costs) — recorded identically on each of the N candidate entries, since each
+  entry is self-describing and there's no separate "batch" object.
+- If the job fails, all N candidates fail together — retry (via the existing
+  `run_job` retry/backoff engine) regenerates the whole batch, not a subset.
+- `edit-candidate` always produces exactly 1 new candidate per call (editing is
+  inherently single-image; `--count` does not apply to it).
+
+**Atomic writes.** `candidates.json` is written by `generate-candidates`,
+`edit-candidate`, and `select-candidate` — three different commands that could
+plausibly run close together (a retry, a fast follow-up edit, multiple agents
+against the same project). To prevent a lost update or a corrupted partial
+write, every write to `candidates.json` goes through write-to-temp-file plus
+`os.replace()` (atomic on both POSIX and Windows) — the same gap flagged for
+`config.json` in the core engine's final review is not repeated here. No lock
+file is introduced for v1; atomic writes are sufficient to prevent corruption,
+and last-write-wins for a genuine race between two picks is acceptable v1
+behavior (the same "you can change your mind" semantics already cover it).
 
 ## 4. Provider & Engine Changes
 
@@ -158,24 +200,54 @@ calling `run_generation_stage` unchanged and never set `num_candidates` above 1.
 The two code paths share provider construction and job execution but never share
 a write path.
 
-**`submit_edit()` on `ImageProvider`, optional.** A new Protocol method:
+**`submit_edit()` on `ImageProvider`, optional, with an explicit capability
+check.** Two additions to the Protocol — a new request dataclass (consistent
+with every other provider method in this codebase already taking a request
+dataclass; `submit_edit(base_image_path, instruction)` as raw positional
+params would have been the one inconsistent exception) and a boolean
+capability query instead of `hasattr`/`NotImplementedError`-as-control-flow:
 
 ```python
+@dataclass
+class ImageEditRequest:
+    base_image_path: str
+    instruction: str
+    mask_path: str | None = None
+    reference_paths: list[str] = field(default_factory=list)
+
 class ImageProvider(Protocol):
     def submit(self, request: ImageGenerationRequest) -> GenerationJob: ...
     def poll(self, job: GenerationJob) -> JobStatus: ...
     def get_result(self, job: GenerationJob) -> ImageGenerationResult: ...
-    def submit_edit(self, base_image_path: str, instruction: str) -> GenerationJob:
-        raise NotImplementedError
+    def supports_edit(self) -> bool: ...
+    def submit_edit(self, request: ImageEditRequest) -> GenerationJob: ...
 ```
 
-`FalImageProvider` implements it against fal's image-editing endpoint (nano-banana
-supports image-to-image editing). `VideoProvider`/`AudioProvider` do not gain this
-method in v1 — editing falls back to prompt-based regeneration, decided entirely
-in the **service layer**, not the provider interface: the service checks whether
-the resolved provider implements `submit_edit` (a plain `hasattr`/try-except
-around `NotImplementedError`) and, if not, calls `submit()` again with the
-original prompt plus the user's edit instruction appended.
+`supports_edit()` is a plain boolean method every `ImageProvider` implements
+(`FalImageProvider.supports_edit()` returns `True`; `MockImageProvider`
+returns `False` by default, configurable in tests). This replaces
+`hasattr()`/`NotImplementedError`-based detection: `hasattr()` only answers
+"does this method exist," not "does this provider actually support editing,"
+and using an exception as capability negotiation is unclear control flow.
+`submit_edit()` itself is only ever called after `supports_edit()` confirmed
+`True` — it does not need its own not-implemented branch. The service layer
+decides the fallback: `if provider.supports_edit(): submit_edit(...) else:
+submit()` with the instruction appended to the original prompt. A single
+boolean method is deliberately chosen over a general `capabilities() -> dict`
+registry — only one capability (`edit`) is needed today; a broader capability
+system for hypothetical future differences across providers is deferred (§9).
+
+`mask_path`/`reference_paths` on `ImageEditRequest` are unused by the v1
+`FalImageProvider.submit_edit()` implementation (which only sends
+`base_image_path` + `instruction`) but present on the dataclass now so a
+future masked-edit or multi-reference-edit capability doesn't require a
+signature change — same reasoning as every other request dataclass in this
+codebase already carrying fields not every provider uses.
+
+`VideoProvider`/`AudioProvider` do not gain `submit_edit`/`supports_edit` in
+v1 — editing falls back to prompt-based regeneration for those capabilities
+entirely, decided in the **service layer**: `submit()` is called again with
+the original prompt plus the user's edit instruction appended.
 
 ## 5. New CLI Commands
 
@@ -204,10 +276,12 @@ instead of `generation.<stage>.artifact`).
   This is the only command that touches anything outside the candidate pool.
 
 - **`ai-film edit-candidate --target <target> --id <id> --instruction "..."`**
-  Cost-gated. Resolves the provider for the target's capability; if it implements
-  `submit_edit`, calls it with the picked candidate's image and the instruction;
-  otherwise falls back to `submit()` with prompt + instruction merged. Either way,
-  adds one new candidate to the pool with `parent` set to the source `id`.
+  Cost-gated. Resolves the provider for the target's capability; if
+  `provider.supports_edit()` is `True`, calls `submit_edit(ImageEditRequest(...))`
+  with the picked candidate's image and the instruction; otherwise falls back to
+  `submit()` with prompt + instruction merged. Either way, adds exactly one new
+  candidate to the pool with `parent` set to the source `id` and `operation` set
+  to `"edit"` (§3).
 
 None of these commands modify the behavior of any existing `generate-image`/
 `generate-video`/`generate-voice`/`generate-sfx`/`generate-music`/`render`/
@@ -260,6 +334,12 @@ four commands, only `--target`/`--stage` differ. Story/character brainstorming
   `shot:*:*` targets they use the existing `storyboard` scope — no new approval
   scope type is introduced. This reuses the two-checkpoint design from the core
   engine spec exactly as built.
+- **Concurrent writers to `candidates.json`:** two commands racing (a retry
+  landing alongside a fresh edit, two agents against the same project) resolve
+  via the atomic-write mechanism in §3 — last successful `os.replace()` wins,
+  no corruption, no partial/torn JSON ever observable. A genuine same-instant
+  double-pick is treated the same as "changed my mind twice in a row" (§3):
+  acceptable v1 behavior, not an error condition.
 
 ## 8. Testing Strategy
 
@@ -273,12 +353,16 @@ the core engine's existing testing rule.
 **Acceptance for the first implementation slice:**
 ```
 ✓ generate-candidates writes N candidates, blocked by cost gate until approved
+✓ all N candidates from one call share the same job.id and estimated_cost
 ✓ review builds a valid HTML file listing every candidate with id + parent
 ✓ select-candidate copies the chosen candidate to reference.png (character target)
 ✓ select-candidate writes into shot.json's generation.<stage>.artifact (shot target),
   and shot.json still validates against the existing schema afterward
-✓ edit-candidate adds a new candidate with correct parent lineage
-✓ edit-candidate falls back to prompt-regeneration when submit_edit is unavailable
+✓ select-candidate can be re-run to change a prior pick (selected updates, no error)
+✓ edit-candidate adds exactly one new candidate with correct parent + operation="edit"
+✓ edit-candidate falls back to prompt-regeneration when supports_edit() is False
+✓ candidates.json writes are atomic (temp file + os.replace), verified by a test
+  that simulates an interrupted write and confirms no partial JSON is ever readable
 ✓ none of the 93 existing core-engine tests regress
 ```
 
@@ -291,3 +375,27 @@ the core engine's existing testing rule.
   slow in practice.
 - Audio muxing into `render` and subtitle support — tracked as pre-existing known
   limitations in the core engine, not created by this spec.
+- **Full selection history** (`selection_history: [{candidate, selected_at,
+  reason}]` alongside `selected`) — deferred because `selected` as a plain
+  current-pointer is sufficient for the first slice's actual use case (pick,
+  maybe change your mind once or twice, move on); a full audit trail of every
+  past selection is speculative value until real usage shows it's needed.
+- **A general `capabilities() -> dict` provider registry** (e.g.
+  `{"image_generation": True, "image_edit": True, "image_variation": False}`)
+  in place of the single `supports_edit() -> bool` method — deferred because
+  only one capability needs negotiating today; a registry for capabilities that
+  don't exist yet (variation, upscale, inpaint) is premature abstraction until
+  a second capability actually needs the same treatment.
+- **Masks and multi-image editing** (`ImageEditRequest.mask_path`/
+  `reference_paths` becoming load-bearing, not just present-but-unused) — the
+  dataclass already has room for this (§4); wiring it into `FalImageProvider`
+  and the CLI is deferred until a real editing need (e.g. "swap only the face,"
+  "combine two candidates") arises.
+- **Agent-side candidate-context tracking** — when the user refers to a
+  candidate by description ("the one with the blue background") rather than by
+  `id`, or asks for a cross-candidate operation ("take 005 but use the face
+  from 002"), the agent needs to hold and reason about visual context beyond
+  what a CLI command captures. This is prompt/skill design for whichever agent
+  conducts the review conversation, not a change to the CLI or data model in
+  this spec — noted here so it isn't lost, and to be addressed when that
+  agent's skill is actually written.
