@@ -67,3 +67,47 @@ def test_generate_all_rejects_unsupported_stage(tmp_path: Path):
     project_dir = _init_mock_project(tmp_path)
     result = runner.invoke(app, ["generate-all", "--stage", "sfx", "--path", str(project_dir)])
     assert result.exit_code == 1
+
+
+def test_generate_all_generates_every_shot_for_video_stage(tmp_path: Path):
+    """The video branch of _build_stage_call is wired identically to the image
+    branch but was never exercised by any test until now."""
+    project_dir = _init_mock_project(tmp_path)
+    shot_ids = ["S01_SH01", "S01_SH02", "S01_SH03"]
+    runner.invoke(
+        app,
+        [
+            "approve-generation", "--scope", "storyboard", "--targets", ",".join(shot_ids),
+            "--path", str(project_dir),
+        ],
+    )
+    result = runner.invoke(app, ["generate-all", "--stage", "video", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    for shot_id in shot_ids:
+        shot = load_shot(project_dir / "03_shots" / f"{shot_id}.json")
+        assert shot["generation"]["video"]["status"] == "completed"
+        artifact_path = Path(shot["generation"]["video"]["artifact"]["path"])
+        assert (project_dir / artifact_path).exists()
+
+
+def test_generate_all_generates_every_shot_for_voice_stage(tmp_path: Path):
+    """The voice branch of _build_stage_call uses a different call signature
+    (text=/speaker= from dialogue, not prompt=) and was never exercised by any
+    test until now — a signature mismatch here would be invisible until real
+    runtime use."""
+    project_dir = _init_mock_project(tmp_path)
+    shot_ids = ["S01_SH01", "S01_SH02", "S01_SH03"]
+    runner.invoke(
+        app,
+        [
+            "approve-generation", "--scope", "storyboard", "--targets", ",".join(shot_ids),
+            "--path", str(project_dir),
+        ],
+    )
+    result = runner.invoke(app, ["generate-all", "--stage", "voice", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    for shot_id in shot_ids:
+        shot = load_shot(project_dir / "03_shots" / f"{shot_id}.json")
+        assert shot["generation"]["voice"]["status"] == "completed"
+        artifact_path = Path(shot["generation"]["voice"]["artifact"]["path"])
+        assert (project_dir / artifact_path).exists()
