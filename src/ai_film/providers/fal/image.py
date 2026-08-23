@@ -35,6 +35,10 @@ class FalImageProvider:
         return client.poll(status_url)
 
     def get_result(self, job: GenerationJob) -> ImageGenerationResult:
+        """Fetch the single artifact for a job submitted via `submit()` with
+        `num_candidates=1`, or for an edit job submitted via `submit_edit()`.
+        Do not call on a job also fetched with `get_results`.
+        """
         if job.id in self._edits:
             _, response_url, request = self._edits[job.id]
             body = client.result(response_url)
@@ -51,6 +55,9 @@ class FalImageProvider:
         return ImageGenerationResult(artifact_path=request.output_path, size_bytes=size_bytes)
 
     def get_results(self, job: GenerationJob, output_dir: str) -> list[ImageGenerationResult]:
+        """Fetch all artifacts for a multi-candidate job submitted via `submit()`
+        with `num_candidates > 1`. Do not call on a job also fetched with `get_result`.
+        """
         _, response_url, _ = self._jobs[job.id]
         body = client.result(response_url)
         out_dir = Path(output_dir)
