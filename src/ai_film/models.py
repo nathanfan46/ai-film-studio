@@ -38,6 +38,7 @@ class ModelInfo:
 class ImageGenerationRequest:
     prompt: str
     model: str
+    num_candidates: int = 1
     reference_paths: list[str] = field(default_factory=list)
     output_path: str = ""
 
@@ -46,6 +47,14 @@ class ImageGenerationRequest:
 class ImageGenerationResult:
     artifact_path: str
     size_bytes: int
+
+
+@dataclass
+class ImageEditRequest:
+    base_image_path: str
+    instruction: str
+    mask_path: str | None = None
+    reference_paths: list[str] = field(default_factory=list)
 
 
 @dataclass
