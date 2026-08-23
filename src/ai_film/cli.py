@@ -18,7 +18,13 @@ from ai_film.providers.fal.catalog import FalProviderCatalog
 from ai_film.providers.registry import resolve_provider
 from ai_film.render import RenderPreflightError, build_manifest
 from ai_film.render import render as render_engine
+from ai_film.review_gallery import build_gallery, open_in_browser
 from ai_film.schema import validate_shot
+from ai_film.services.candidate_service import (
+    edit_candidate as edit_candidate_service,
+    generate_candidates as generate_candidates_service,
+    select_candidate as select_candidate_service,
+)
 from ai_film.services.generation_service import (
     generate_image as generate_image_service,
     generate_music as generate_music_service,
@@ -359,6 +365,115 @@ def generate_all_cmd(
             if error is not None:
                 typer.echo(f"  {shot_id}: {error}", err=True)
         raise typer.Exit(code=1)
+
+
+def _shot_default_prompt(path: Path, shot_id: str) -> str:
+    shot_data = load_shot(path / "03_shots" / f"{shot_id}.json")
+    return build_image_prompt(shot_data)
+
+
+@app.command(name="generate-candidates")
+def generate_candidates_cmd(
+    target: str = typer.Option(..., "--target"),
+    count: int = typer.Option(..., "--count"),
+    prompt: str = typer.Option(None, "--prompt"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+) -> None:
+    """Generate N image candidates for a character:/env:/shot: target (cost-gated)."""
+    stage_config, gen_config = _stage_config(path, "image")
+
+    if prompt is None:
+        if target.startswith("shot:"):
+            shot_id = target.split(":")[1]
+            prompt = _shot_default_prompt(path, shot_id)
+        else:
+            typer.echo("--prompt is required for character:/env: targets", err=True)
+            raise typer.Exit(code=1)
+
+    def _run():
+        provider = resolve_provider(Capability.IMAGE, stage_config["provider"])
+        return generate_candidates_service(
+            project_dir=path, target=target, provider=provider,
+            prompt=prompt, model=stage_config["model"], count=count,
+            provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
+            poll_interval_seconds=gen_config["poll_interval_seconds"],
+        )
+
+    try:
+        result = _run()
+    except CostGateError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    except ProviderError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"{target}: generated {len(result['added'])} candidate(s): {', '.join(result['added'])}")
+
+
+@app.command(name="review")
+def review_cmd(
+    target: str = typer.Option(..., "--target"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+) -> None:
+    """Build (or rebuild) the candidate review gallery and open it in the browser."""
+    try:
+        html_path = build_gallery(path, target)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    open_in_browser(html_path)
+    typer.echo(f"opened {html_path}")
+
+
+@app.command(name="select-candidate")
+def select_candidate_cmd(
+    target: str = typer.Option(..., "--target"),
+    id: str = typer.Option(..., "--id"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+) -> None:
+    """Lock in a candidate as the canonical artifact for a target."""
+    try:
+        result = select_candidate_service(path, target, id)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"{target}: selected {id} -> {result['canonical_path']}")
+
+
+@app.command(name="edit-candidate")
+def edit_candidate_cmd(
+    target: str = typer.Option(..., "--target"),
+    id: str = typer.Option(..., "--id"),
+    instruction: str = typer.Option(..., "--instruction"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+) -> None:
+    """Refine a candidate via true edit (if the provider supports it) or regeneration."""
+    stage_config, gen_config = _stage_config(path, "image")
+
+    def _run():
+        provider = resolve_provider(Capability.IMAGE, stage_config["provider"])
+        return edit_candidate_service(
+            project_dir=path, target=target, candidate_id=id, instruction=instruction,
+            provider=provider, provider_name=stage_config["provider"], model=stage_config["model"],
+            max_attempts=gen_config["max_attempts"],
+            poll_interval_seconds=gen_config["poll_interval_seconds"],
+        )
+
+    try:
+        entry = _run()
+    except CostGateError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    except ProviderError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"{target}: added candidate {entry['id']} (edit of {entry['parent']})")
 
 
 if __name__ == "__main__":
