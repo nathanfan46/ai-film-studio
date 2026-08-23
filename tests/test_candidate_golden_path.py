@@ -4,6 +4,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from ai_film.candidate_store import load_candidate_set
 from ai_film.cli import app
 from ai_film.shot_store import load_shot
 
@@ -76,6 +77,17 @@ def test_full_candidate_loop_generate_review_edit_select(tmp_path: Path, monkeyp
     assert "005" in gallery_content
     assert "edit of 002" in gallery_content
 
+    # MockImageProvider writes identical bytes (b"MOCK-PNG-DATA") for every
+    # candidate, so a byte-comparison assertion against any two candidates
+    # would pass trivially and couldn't tell "select_candidate copied the
+    # right file" from "select_candidate silently no-op'd". Tag each candidate
+    # file with distinguishable, id-tagged content now that generation/editing
+    # is complete, so the select/re-select assertions below actually
+    # discriminate between candidates.
+    candidates_dir = project_dir / "assets" / "characters" / "girl" / "candidates"
+    for candidate_file in candidates_dir.glob("*.png"):
+        candidate_file.write_bytes(f"CONTENT-{candidate_file.stem}".encode())
+
     # 7. select the edited candidate, locking it in
     result = runner.invoke(
         app,
@@ -85,6 +97,8 @@ def test_full_candidate_loop_generate_review_edit_select(tmp_path: Path, monkeyp
     reference_path = project_dir / "assets" / "characters" / "girl" / "reference.png"
     assert reference_path.exists()
     assert reference_path.read_bytes() == edited_path.read_bytes()
+    assert reference_path.read_bytes() == b"CONTENT-005"
+    assert load_candidate_set(project_dir, "character:girl")["selected"] == "005"
 
     # 8. changing the mind: re-select an earlier candidate overwrites the lock, no error
     result = runner.invoke(
@@ -94,6 +108,8 @@ def test_full_candidate_loop_generate_review_edit_select(tmp_path: Path, monkeyp
     assert result.exit_code == 0
     candidate_001 = project_dir / "assets" / "characters" / "girl" / "candidates" / "001.png"
     assert reference_path.read_bytes() == candidate_001.read_bytes()
+    assert reference_path.read_bytes() == b"CONTENT-001"
+    assert load_candidate_set(project_dir, "character:girl")["selected"] == "001"
 
     # 9. none of the core engine's existing commands are affected: run the ordinary
     #    shot pipeline end to end alongside the candidate flow, to confirm the two
