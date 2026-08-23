@@ -5,6 +5,7 @@ import pytest
 from ai_film.errors import ProviderError
 from ai_film.models import (
     Capability,
+    ImageEditRequest,
     ImageGenerationRequest,
     JobStatus,
     MusicGenerationRequest,
@@ -80,6 +81,46 @@ def test_mock_audio_provider_submit_music(tmp_path: Path):
     )
     job = provider.submit_music(request)
     assert job.capability == Capability.MUSIC
+    assert provider.poll(job) == JobStatus.COMPLETED
+    result = provider.get_result(job)
+    assert Path(result.artifact_path).exists()
+
+
+def test_mock_image_provider_get_results_writes_num_candidates_files(tmp_path: Path):
+    provider = MockImageProvider()
+    output_dir = tmp_path / "candidates"
+    request = ImageGenerationRequest(
+        prompt="a girl", model="nano-banana", num_candidates=3, reference_paths=[],
+    )
+    job = provider.submit(request)
+    provider.poll(job)
+    results = provider.get_results(job, str(output_dir))
+    assert len(results) == 3
+    for result in results:
+        assert Path(result.artifact_path).exists()
+        assert Path(result.artifact_path).parent == output_dir
+        assert result.size_bytes > 0
+
+
+def test_mock_image_provider_supports_edit_defaults_false():
+    provider = MockImageProvider()
+    assert provider.supports_edit() is False
+
+
+def test_mock_image_provider_submit_edit_raises_when_unsupported(tmp_path: Path):
+    provider = MockImageProvider()
+    request = ImageEditRequest(base_image_path=str(tmp_path / "001.png"), instruction="warmer")
+    with pytest.raises(NotImplementedError):
+        provider.submit_edit(request)
+
+
+def test_mock_image_provider_submit_edit_completes_when_supported(tmp_path: Path):
+    provider = MockImageProvider(supports_edit=True)
+    assert provider.supports_edit() is True
+    base_image = tmp_path / "001.png"
+    base_image.write_bytes(b"MOCK-PNG-DATA")
+    request = ImageEditRequest(base_image_path=str(base_image), instruction="warmer lighting")
+    job = provider.submit_edit(request)
     assert provider.poll(job) == JobStatus.COMPLETED
     result = provider.get_result(job)
     assert Path(result.artifact_path).exists()
