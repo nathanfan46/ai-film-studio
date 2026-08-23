@@ -37,7 +37,11 @@ def generate_candidates(
     provider_name: str,
     max_attempts: int = 3,
     poll_interval_seconds: float = 0.0,
+    reference_paths: list[str] | None = None,
 ) -> dict:
+    if count <= 0:
+        raise ValueError(f"count must be positive, got {count}")
+
     scope = scope_for_target(target)
     if not is_approved(project_dir, scope, target):
         raise CostGateError(
@@ -46,7 +50,10 @@ def generate_candidates(
         )
 
     output_dir = target_dir(project_dir, target) / "candidates"
-    request = ImageGenerationRequest(prompt=prompt, model=model, num_candidates=count)
+    request = ImageGenerationRequest(
+        prompt=prompt, model=model, num_candidates=count,
+        reference_paths=reference_paths or [],
+    )
 
     def on_attempt(attempt: int, job: GenerationJob | None, outcome: str) -> None:
         write_attempt_log(

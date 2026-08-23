@@ -4,6 +4,8 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from ai_film.cli import app
+from ai_film.providers.mock.image import MockImageProvider
+from ai_film.shot_store import save_shot
 
 runner = CliRunner()
 
@@ -64,6 +66,77 @@ def test_generate_candidates_requires_prompt_for_character_target(tmp_path: Path
 
     assert result.exit_code == 1
     assert "--prompt" in result.output
+
+
+def test_generate_candidates_for_shot_target_passes_character_references(
+    tmp_path: Path, monkeypatch
+):
+    """generate-candidates for a shot:*:image target must gather the shot's locked-in
+    character reference images and thread them through to the provider, same as the
+    pre-existing generate-image command does — otherwise storyboard candidates are
+    generated with zero conditioning on the character's selected reference.png."""
+    project_dir = _init_mock_project(tmp_path)
+    shot_path = project_dir / "03_shots" / "S01_SH01.json"
+    save_shot(
+        shot_path,
+        {
+            "schema_version": "1.0",
+            "id": "S01_SH01",
+            "status": "draft",
+            "duration_seconds": 2,
+            "continuity": {"status": "pending", "checked_at": None, "issues": []},
+            "action": "girl steps out of darkness",
+            "visual": {"style": "cinematic sci-fi"},
+            "camera": {"shot": "close_up", "movement": "slow_push_in"},
+            "characters": [{"name": "girl", "reference": "assets/characters/girl/reference.png"}],
+            "generation": {
+                "image": {"status": "pending", "attempts": 0},
+                "video": {"status": "pending", "attempts": 0},
+                "voice": {"status": "not_required"},
+                "sfx": {"status": "not_required"},
+                "music": {"status": "not_required"},
+            },
+        },
+    )
+    runner.invoke(
+        app,
+        ["approve-generation", "--scope", "storyboard", "--targets", "shot:S01_SH01:image",
+         "--path", str(project_dir)],
+    )
+    provider = MockImageProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(
+        app,
+        ["generate-candidates", "--target", "shot:S01_SH01:image", "--count", "2",
+         "--path", str(project_dir)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(provider._requests) == 1
+    sent_request = next(iter(provider._requests.values()))
+    assert sent_request.reference_paths == ["assets/characters/girl/reference.png"]
+
+
+def test_generate_candidates_for_character_target_sends_no_references(
+    tmp_path: Path, monkeypatch
+):
+    """character:/env: targets have no shot to read characters from, so
+    reference_paths must default to empty — no behavior change there."""
+    project_dir = _init_mock_project(tmp_path)
+    _approve_bibles(project_dir)
+    provider = MockImageProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(
+        app,
+        ["generate-candidates", "--target", "character:girl", "--count", "2",
+         "--prompt", "a girl, sci-fi style", "--path", str(project_dir)],
+    )
+
+    assert result.exit_code == 0, result.output
+    sent_request = next(iter(provider._requests.values()))
+    assert sent_request.reference_paths == []
 
 
 def test_review_errors_clearly_on_empty_pool(tmp_path: Path):

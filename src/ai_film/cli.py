@@ -367,11 +367,6 @@ def generate_all_cmd(
         raise typer.Exit(code=1)
 
 
-def _shot_default_prompt(path: Path, shot_id: str) -> str:
-    shot_data = load_shot(path / "03_shots" / f"{shot_id}.json")
-    return build_image_prompt(shot_data)
-
-
 @app.command(name="generate-candidates")
 def generate_candidates_cmd(
     target: str = typer.Option(..., "--target"),
@@ -382,21 +377,26 @@ def generate_candidates_cmd(
     """Generate N image candidates for a character:/env:/shot: target (cost-gated)."""
     stage_config, gen_config = _stage_config(path, "image")
 
-    if prompt is None:
-        if target.startswith("shot:"):
-            shot_id = target.split(":")[1]
-            prompt = _shot_default_prompt(path, shot_id)
-        else:
-            typer.echo("--prompt is required for character:/env: targets", err=True)
-            raise typer.Exit(code=1)
+    references: list[str] = []
+    if target.startswith("shot:"):
+        shot_id = target.split(":")[1]
+        shot_data = load_shot(path / "03_shots" / f"{shot_id}.json")
+        references = [c["reference"] for c in shot_data.get("characters", []) if c.get("reference")]
+        if prompt is None:
+            prompt = build_image_prompt(shot_data)
+    elif prompt is None:
+        typer.echo("--prompt is required for character:/env: targets", err=True)
+        raise typer.Exit(code=1)
 
     def _run():
         provider = resolve_provider(Capability.IMAGE, stage_config["provider"])
+        kwargs = {"reference_paths": references} if target.startswith("shot:") else {}
         return generate_candidates_service(
             project_dir=path, target=target, provider=provider,
             prompt=prompt, model=stage_config["model"], count=count,
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"],
+            **kwargs,
         )
 
     try:

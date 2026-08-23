@@ -99,6 +99,66 @@ def test_generate_candidates_raises_provider_error_after_exhausted_retries(tmp_p
         )
 
 
+def test_generate_candidates_threads_reference_paths_into_request(tmp_path: Path):
+    """A shot target's character reference images must reach the provider's
+    ImageGenerationRequest so candidates are conditioned on the locked-in reference,
+    matching what generate-image already does for single-shot generation."""
+    _init_config(tmp_path)
+    approve_generation(tmp_path, "storyboard", ["shot:S01_SH01:image"], estimated_cost=0.32)
+    provider = MockImageProvider()
+
+    generate_candidates(
+        project_dir=tmp_path, target="shot:S01_SH01:image", provider=provider,
+        prompt="a girl in a corridor", model="nano-banana", count=2, provider_name="mock",
+        reference_paths=["assets/characters/girl/reference.png"],
+    )
+
+    assert len(provider._requests) == 1
+    sent_request = next(iter(provider._requests.values()))
+    assert sent_request.reference_paths == ["assets/characters/girl/reference.png"]
+
+
+def test_generate_candidates_defaults_reference_paths_to_empty(tmp_path: Path):
+    _init_config(tmp_path)
+    approve_generation(tmp_path, "bibles", ["character:girl"], estimated_cost=0.32)
+    provider = MockImageProvider()
+
+    generate_candidates(
+        project_dir=tmp_path, target="character:girl", provider=provider,
+        prompt="a girl", model="nano-banana", count=1, provider_name="mock",
+    )
+
+    sent_request = next(iter(provider._requests.values()))
+    assert sent_request.reference_paths == []
+
+
+@pytest.mark.parametrize("count", [0, -1])
+def test_generate_candidates_rejects_non_positive_count(tmp_path: Path, count: int):
+    _init_config(tmp_path)
+    approve_generation(tmp_path, "bibles", ["character:girl"], estimated_cost=0.32)
+    provider = MockImageProvider()
+
+    with pytest.raises(ValueError, match="count must be positive"):
+        generate_candidates(
+            project_dir=tmp_path, target="character:girl", provider=provider,
+            prompt="a girl", model="nano-banana", count=count, provider_name="mock",
+        )
+    assert provider._submit_calls == 0
+
+
+def test_generate_candidates_rejects_non_positive_count_before_cost_gate_check(tmp_path: Path):
+    """count<=0 must fail fast, even when the target isn't approved at all —
+    it shouldn't waste a cost-gate lookup on a request that can never succeed."""
+    _init_config(tmp_path)
+    provider = MockImageProvider()
+
+    with pytest.raises(ValueError, match="count must be positive"):
+        generate_candidates(
+            project_dir=tmp_path, target="character:girl", provider=provider,
+            prompt="a girl", model="nano-banana", count=0, provider_name="mock",
+        )
+
+
 def test_generate_candidates_writes_attempt_log(tmp_path: Path):
     _init_config(tmp_path)
     approve_generation(tmp_path, "bibles", ["character:girl"], estimated_cost=0.32)
