@@ -4,10 +4,11 @@ from pathlib import Path
 import pytest
 
 from ai_film.approval import approve_generation
-from ai_film.candidate_store import load_candidate_set
+from ai_film.candidate_store import add_candidates, load_candidate_set
 from ai_film.errors import CostGateError, ProviderError
 from ai_film.providers.mock.image import MockImageProvider
-from ai_film.services.candidate_service import generate_candidates
+from ai_film.services.candidate_service import generate_candidates, select_candidate
+from ai_film.shot_store import load_shot, save_shot
 
 
 def _init_config(project_dir: Path) -> None:
@@ -110,3 +111,87 @@ def test_generate_candidates_writes_attempt_log(tmp_path: Path):
 
     logs = list((tmp_path / "99_logs" / "character_girl").glob("*_candidates_attempt01.json"))
     assert len(logs) == 1
+
+
+def _seed_character_candidate(tmp_path: Path, target: str = "character:girl") -> None:
+    directory = tmp_path / "assets" / "characters" / "girl" / "candidates"
+    directory.mkdir(parents=True)
+    (directory / "001.png").write_bytes(b"CANDIDATE-ONE")
+    add_candidates(tmp_path, target, [{
+        "id": "001", "path": "candidates/001.png", "provider": "mock", "model": "nano-banana",
+        "prompt": "a girl", "parent": None, "operation": "generate", "job": None,
+        "estimated_cost": None, "created_at": "2026-08-22T00:00:00Z",
+    }])
+
+
+def test_select_candidate_copies_to_reference_png_for_character_target(tmp_path: Path):
+    _seed_character_candidate(tmp_path)
+
+    result = select_candidate(tmp_path, "character:girl", "001")
+
+    assert result == {
+        "target": "character:girl", "selected": "001",
+        "canonical_path": "assets/characters/girl/reference.png",
+    }
+    reference_path = tmp_path / "assets" / "characters" / "girl" / "reference.png"
+    assert reference_path.read_bytes() == b"CANDIDATE-ONE"
+    candidate_set = load_candidate_set(tmp_path, "character:girl")
+    assert candidate_set["selected"] == "001"
+
+
+def test_select_candidate_can_be_re_run_to_change_pick(tmp_path: Path):
+    _seed_character_candidate(tmp_path)
+    directory = tmp_path / "assets" / "characters" / "girl" / "candidates"
+    (directory / "002.png").write_bytes(b"CANDIDATE-TWO")
+    add_candidates(tmp_path, "character:girl", [{
+        "id": "002", "path": "candidates/002.png", "provider": "mock", "model": "nano-banana",
+        "prompt": "a girl v2", "parent": "001", "operation": "edit", "job": None,
+        "estimated_cost": None, "created_at": "2026-08-22T00:05:00Z",
+    }])
+
+    select_candidate(tmp_path, "character:girl", "001")
+    select_candidate(tmp_path, "character:girl", "002")
+
+    reference_path = tmp_path / "assets" / "characters" / "girl" / "reference.png"
+    assert reference_path.read_bytes() == b"CANDIDATE-TWO"
+    assert load_candidate_set(tmp_path, "character:girl")["selected"] == "002"
+
+
+def _seed_shot(tmp_path: Path) -> None:
+    shot = {
+        "schema_version": "1.0", "id": "S01_SH01", "status": "draft", "duration_seconds": 3,
+        "continuity": {"status": "pending", "checked_at": None, "issues": []},
+        "generation": {
+            "image": {"status": "pending", "attempts": 0},
+            "video": {"status": "pending", "attempts": 0},
+            "voice": {"status": "not_required"},
+            "sfx": {"status": "not_required"},
+            "music": {"status": "not_required"},
+        },
+    }
+    save_shot(tmp_path / "03_shots" / "S01_SH01.json", shot)
+
+
+def _seed_shot_candidate(tmp_path: Path) -> None:
+    directory = tmp_path / "04_storyboard" / "candidates" / "S01_SH01" / "candidates"
+    directory.mkdir(parents=True)
+    (directory / "001.png").write_bytes(b"SHOT-CANDIDATE")
+    add_candidates(tmp_path, "shot:S01_SH01:image", [{
+        "id": "001", "path": "candidates/001.png", "provider": "mock", "model": "nano-banana",
+        "prompt": "wide shot", "parent": None, "operation": "generate", "job": None,
+        "estimated_cost": None, "created_at": "2026-08-22T00:00:00Z",
+    }])
+
+
+def test_select_candidate_writes_into_shot_json_for_shot_target(tmp_path: Path):
+    _seed_shot(tmp_path)
+    _seed_shot_candidate(tmp_path)
+
+    result = select_candidate(tmp_path, "shot:S01_SH01:image", "001")
+
+    assert result["canonical_path"] == "04_storyboard/S01_SH01.png"
+    artifact_path = tmp_path / "04_storyboard" / "S01_SH01.png"
+    assert artifact_path.read_bytes() == b"SHOT-CANDIDATE"
+    shot = load_shot(tmp_path / "03_shots" / "S01_SH01.json")
+    assert shot["generation"]["image"]["status"] == "completed"
+    assert shot["generation"]["image"]["artifact"]["path"] == "04_storyboard/S01_SH01.png"

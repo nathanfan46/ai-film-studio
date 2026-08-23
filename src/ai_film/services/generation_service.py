@@ -91,7 +91,7 @@ def run_generation_stage(
 
     artifact = result_to_artifact(job_result.result)
     if artifact.get("path"):
-        artifact = {**artifact, "path": _project_relative_path(artifact["path"], project_dir)}
+        artifact = {**artifact, "path": project_relative_path(artifact["path"], project_dir)}
     shot["generation"][stage] = {
         "provider": provider_name,
         "model": model_name,
@@ -105,7 +105,7 @@ def run_generation_stage(
     return shot["generation"][stage]
 
 
-def _project_relative_path(path_str: str, project_dir: Path) -> str:
+def project_relative_path(path_str: str, project_dir: Path) -> str:
     """Store artifact paths relative to the project directory.
 
     Callers build `output_path` as `project_dir / "05_video" / ...`, so the

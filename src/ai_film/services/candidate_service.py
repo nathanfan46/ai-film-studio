@@ -1,14 +1,17 @@
 # src/ai_film/services/candidate_service.py
 from __future__ import annotations
 
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
 from ai_film.approval import is_approved
 from ai_film.candidate_store import (
     add_candidates,
+    get_candidate,
     load_candidate_set,
     next_candidate_id,
+    save_candidate_set,
     scope_for_target,
     target_dir,
 )
@@ -16,6 +19,8 @@ from ai_film.errors import CostGateError
 from ai_film.jobs import run_job
 from ai_film.logging_store import write_attempt_log
 from ai_film.models import GenerationJob, ImageGenerationRequest
+from ai_film.services.generation_service import project_relative_path
+from ai_film.shot_store import load_shot, save_shot
 
 
 def _log_group(target: str) -> str:
@@ -86,3 +91,41 @@ def generate_candidates(
 
     add_candidates(project_dir, target, entries)
     return {"target": target, "added": [e["id"] for e in entries]}
+
+
+def select_candidate(project_dir: Path, target: str, candidate_id: str) -> dict:
+    candidate_set = load_candidate_set(project_dir, target)
+    candidate = get_candidate(candidate_set, candidate_id)
+    candidate_set["selected"] = candidate_id
+    save_candidate_set(project_dir, target, candidate_set)
+
+    directory = target_dir(project_dir, target)
+    source_path = directory / candidate["path"]
+    kind = target.split(":", 1)[0]
+
+    if kind in ("character", "env"):
+        dest_path = directory / "reference.png"
+        shutil.copy(source_path, dest_path)
+    else:
+        shot_id = target.split(":")[1]
+        shot_path = project_dir / "03_shots" / f"{shot_id}.json"
+        shot = load_shot(shot_path)
+        dest_path = project_dir / "04_storyboard" / f"{shot_id}.png"
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(source_path, dest_path)
+        shot["generation"]["image"] = {
+            **shot["generation"].get("image", {}),
+            "status": "completed",
+            "artifact": {
+                "path": project_relative_path(str(dest_path), project_dir),
+                "size_bytes": dest_path.stat().st_size,
+                "sha256": None,
+            },
+        }
+        save_shot(shot_path, shot)
+
+    return {
+        "target": target,
+        "selected": candidate_id,
+        "canonical_path": project_relative_path(str(dest_path), project_dir),
+    }
