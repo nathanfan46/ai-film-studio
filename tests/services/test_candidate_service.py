@@ -7,7 +7,7 @@ from ai_film.approval import approve_generation
 from ai_film.candidate_store import add_candidates, load_candidate_set
 from ai_film.errors import CostGateError, ProviderError
 from ai_film.providers.mock.image import MockImageProvider
-from ai_film.services.candidate_service import generate_candidates, select_candidate
+from ai_film.services.candidate_service import edit_candidate, generate_candidates, select_candidate
 from ai_film.shot_store import load_shot, save_shot
 
 
@@ -195,3 +195,71 @@ def test_select_candidate_writes_into_shot_json_for_shot_target(tmp_path: Path):
     shot = load_shot(tmp_path / "03_shots" / "S01_SH01.json")
     assert shot["generation"]["image"]["status"] == "completed"
     assert shot["generation"]["image"]["artifact"]["path"] == "04_storyboard/S01_SH01.png"
+
+
+def test_edit_candidate_blocked_without_approval(tmp_path: Path):
+    _init_config(tmp_path)
+    _seed_character_candidate(tmp_path)
+    provider = MockImageProvider(supports_edit=True)
+
+    with pytest.raises(CostGateError):
+        edit_candidate(
+            project_dir=tmp_path, target="character:girl", candidate_id="001",
+            instruction="black jacket", provider=provider, provider_name="mock",
+            model="nano-banana",
+        )
+
+
+def test_edit_candidate_uses_submit_edit_when_supported(tmp_path: Path):
+    _init_config(tmp_path)
+    approve_generation(tmp_path, "bibles", ["character:girl"], estimated_cost=0.1)
+    _seed_character_candidate(tmp_path)
+    provider = MockImageProvider(supports_edit=True)
+
+    entry = edit_candidate(
+        project_dir=tmp_path, target="character:girl", candidate_id="001",
+        instruction="black jacket instead of white", provider=provider,
+        provider_name="mock", model="nano-banana",
+    )
+
+    assert entry["parent"] == "001"
+    assert entry["operation"] == "edit"
+    assert entry["id"] == "002"
+    candidate_set = load_candidate_set(tmp_path, "character:girl")
+    assert len(candidate_set["candidates"]) == 2
+    new_path = tmp_path / "assets" / "characters" / "girl" / entry["path"]
+    assert new_path.exists()
+
+
+def test_edit_candidate_falls_back_to_regeneration_when_unsupported(tmp_path: Path):
+    _init_config(tmp_path)
+    approve_generation(tmp_path, "bibles", ["character:girl"], estimated_cost=0.1)
+    _seed_character_candidate(tmp_path)
+    provider = MockImageProvider(supports_edit=False)
+
+    entry = edit_candidate(
+        project_dir=tmp_path, target="character:girl", candidate_id="001",
+        instruction="black jacket instead of white", provider=provider,
+        provider_name="mock", model="nano-banana",
+    )
+
+    assert entry["parent"] == "001"
+    assert entry["operation"] == "edit"
+    assert "black jacket instead of white" in entry["prompt"]
+    assert entry["prompt"].startswith("a girl")  # original candidate's prompt is preserved as a prefix
+    new_path = tmp_path / "assets" / "characters" / "girl" / entry["path"]
+    assert new_path.exists()
+
+
+def test_edit_candidate_on_missing_id_raises_clear_error(tmp_path: Path):
+    _init_config(tmp_path)
+    approve_generation(tmp_path, "bibles", ["character:girl"], estimated_cost=0.1)
+    _seed_character_candidate(tmp_path)
+    provider = MockImageProvider(supports_edit=True)
+
+    with pytest.raises(ValueError):
+        edit_candidate(
+            project_dir=tmp_path, target="character:girl", candidate_id="999",
+            instruction="black jacket", provider=provider, provider_name="mock",
+            model="nano-banana",
+        )
