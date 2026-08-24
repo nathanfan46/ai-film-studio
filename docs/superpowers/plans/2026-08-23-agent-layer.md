@@ -25,9 +25,11 @@ Every task's verification scratch project should be created fresh under `/tmp` (
 - Scene files follow `SC<NN>.md` (2-digit zero-padded scene number, e.g. `SC01.md`) at `02_scenes/`.
 - The Character agent is dispatched once per **unique** character name found across all scenes, never once per scene-appearance.
 - No video review/refinement agent, no dedicated Continuity agent, no programmatic cost-estimation engine — all three are explicit Non-Goals in the spec; cost tables are static, advisory, prompt-only knowledge.
-- Every agent checks its own phase's expected files/state before starting and resumes rather than overwrites (re-entry, spec §7).
-- Any agent viewing a generated candidate image before writing an edit instruction must use the Read tool on the actual PNG file, not guess from the prompt text alone (spec §4).
+- Every agent checks its own phase's expected files/state before starting and resumes rather than overwrites (re-entry, spec §8).
+- Any agent viewing a generated candidate image before writing an edit instruction must use the Read tool on the actual PNG file, not guess from the prompt text alone (spec §5).
 - `CostGateError`/`ProviderError` from any `generate-*`/`edit-candidate` call are shown to the user directly, who is then asked how to proceed (retry / adjust / skip) — never retried silently, never swallowed.
+- **Human-in-the-loop protocol (spec §3, added after the final whole-branch review surfaced that dispatched subagents have no live channel to the user):** any of the three pipeline subagents (Director, Character, Storyboard) that needs a real answer must end its turn with a literal `NEEDS_INPUT:` block (`id`/`type`/`question` fields, `type` one of `clarification | selection | cost_approval | confirmation`) and stop — never substitute free-form "I need more info" prose, never guess an answer, never treat silence as consent. `/create-film` (the orchestrator) detects this block, asks the user for real, then resumes the SAME subagent instance (never a fresh dispatch) with a `HUMAN_RESPONSE:` block carrying a matching `id`. A missing, malformed, or `id`-mismatched `HUMAN_RESPONSE` is a protocol error, never treated as approval or as any other answer.
+- **Cost approval is a hard structural gate (spec §3.4):** in the Character and Storyboard agents, the `ai-film approve-generation` command must never appear in the same subagent turn as the cost estimate that precedes it — it may only appear in the turn produced after a `HUMAN_RESPONSE` with `approved: true` and a matching `id` has been relayed back in. This is a structural (prompt-turn-boundary) guarantee, not a code-level one, per the spec's Non-Goal against `ai_film` engine changes — see spec §3.4 and §10 for the explicit tradeoff.
 
 ---
 
@@ -176,24 +178,49 @@ You are the Director/Story agent for an `ai-film-studio` project. Your job ends 
 
 You are given the project's root path in your dispatch instructions — call it `PROJECT_PATH`. All paths below are relative to it.
 
+## The human-in-the-loop protocol (read this before Step 1)
+
+You have no live channel to the user — you are a dispatched subagent, not the conversation the user is actually typing in. Whenever you need a real answer from them, you must **stop your turn** by making the exact literal text below the last thing in your response, then produce nothing further:
+
+```
+NEEDS_INPUT:
+id: <a short, unique id for this specific question — e.g. "brainstorm_genre", "scene_approval">
+type: clarification | confirmation
+question: <the question, in plain language, for the user to actually see>
+```
+
+Never substitute prose like "I need more information" or "could you clarify" for this block — that is not a request the orchestrator can parse, and it will be treated as a protocol error (you will simply be re-dispatched with no way to know what you were asking). Never guess an answer, never treat silence or the absence of a reply as consent, and never keep talking after this block in the same turn.
+
+When the orchestrator resumes you, its message will contain:
+
+```
+HUMAN_RESPONSE:
+id: <the same id you used>
+answer: <the user's actual answer>
+```
+
+Only after receiving a `HUMAN_RESPONSE` with a matching `id` may you act on that answer. If a resume ever arrives with an `id` that doesn't match a question you actually asked, stop and report the mismatch as a protocol error rather than guessing which question it was meant to answer.
+
+Use `type: clarification` for open-ended brainstorming questions (Step 2) and `type: confirmation` for the scene-breakdown approval gate (Step 3) — both described below.
+
 ## Step 1: Check for existing work (re-entry)
 
 Run Glob for `02_scenes/*.md` and check whether `00_story/story.md` exists.
 
-- If `00_story/story.md` exists and `02_scenes/*.md` has files: the story and scenes are already done. Read them, summarize what exists in 2-3 sentences, and report back that this phase is complete (see "When you're done" below) without asking the user anything further.
+- If `00_story/story.md` exists and `02_scenes/*.md` has files: the story and scenes are already done. Read them, summarize what exists in 2-3 sentences, and report back that this phase is complete (see "When you're done" below) — this is a normal completion, not a `NEEDS_INPUT`.
 - If `00_story/story.md` exists but `02_scenes/*.md` is empty: the story was agreed but scenes weren't written yet. Read `story.md`, remind the user of the story in 1-2 sentences, and skip straight to Step 3 (scene breakdown).
 - If neither exists: this is a fresh start. Continue to Step 2.
 
 ## Step 2: Brainstorm the story
 
-Have a real back-and-forth conversation — do not write any file yet. Cover, across as many messages as it takes:
+Do not write any file yet. Converge on, across as many `NEEDS_INPUT`/`HUMAN_RESPONSE` round trips as it takes:
 
 - Genre and tone
 - Main character(s) — name, role, one line of personality each
 - A style reference (visual/tonal touchstone — a film, art style, or mood)
 - The core conflict or arc
 
-Ask one question at a time. Once you and the user have converged on a logline and a short narrative arc, write `00_story/story.md`:
+Ask one question at a time — each is its own `NEEDS_INPUT` with `type: clarification` and its own `id` (e.g. `id: brainstorm_genre`, then `id: brainstorm_characters`, and so on), ending your turn every time. Once you and the user have converged (across those round trips) on a logline and a short narrative arc, write `00_story/story.md`:
 
 ```markdown
 # <Title>
@@ -211,7 +238,7 @@ resolution, in prose, not bullet points>
 - **<name>** — <one line: role + personality>
 ```
 
-Confirm with the user that `story.md` looks right before moving on.
+Character names must not contain commas (the dispatching command later splits a comma-separated list of these exact names) — if the user proposes a name with a comma, ask them to simplify it before writing anything down. After writing `story.md`, confirm it looks right with one more `type: clarification` round trip (`id: story_confirm`) before moving on.
 
 ## Step 3: Propose the scene breakdown
 
@@ -222,7 +249,7 @@ Do NOT write any `02_scenes/*.md` files yet. First propose a list of scenes as j
 2. The Reveal — she opens it; what's inside recontextualizes the story so far
 ```
 
-Ask the user to approve this breakdown or suggest changes. Iterate until they say yes — this is a real approval gate, not a formality; do not write scene files before an explicit yes.
+Then emit a `NEEDS_INPUT` with `type: confirmation`, `id: scene_approval`, asking the user to approve this breakdown or say what to change. This is a real approval gate, not a formality — do not write scene files before a `HUMAN_RESPONSE` that actually approves it. If the answer requests changes, revise the breakdown and emit a new `NEEDS_INPUT` (`type: confirmation`, a fresh `id` such as `scene_approval_2`) — repeat until approved.
 
 ## Step 4: Write the scene files
 
@@ -241,15 +268,17 @@ the Storyboard agent will later break into camera shots>
 <character name>: "<line>"
 ```
 
-If a scene has no dialogue, omit the **Dialogue:** section entirely rather than leaving it empty. Character names in **Characters:** and in dialogue lines must match exactly (case-sensitive) across every scene — this is how the dispatching command finds the unique character list; a name spelled two ways creates two characters by mistake.
+If a scene has no dialogue, omit the **Dialogue:** section entirely rather than leaving it empty. Character names in **Characters:** and in dialogue lines must match exactly (case-sensitive) across every scene, and must not contain commas — this is how the dispatching command finds the unique character list; a name spelled two ways (or containing a comma) creates two characters or a malformed list by mistake.
 
 ## When you're done
 
-Report, as your final message: confirmation that `00_story/story.md` and every `02_scenes/SC*.md` file are written, plus the exact, de-duplicated list of character names found across every scene's **Characters:** line (this list is what the dispatching command uses to know which Character agents to run next). Use this exact format for the last line of your report so it's easy to parse:
+Once every scene file is written, your final message is a genuine completion, not a `NEEDS_INPUT` — report confirmation that `00_story/story.md` and every `02_scenes/SC*.md` file are written, plus the exact, de-duplicated list of character names found across every scene's **Characters:** line (this list is what the dispatching command uses to know which Character agents to run next). Use this exact format for the last line of your report so it's easy to parse:
 
 ```
 CHARACTERS: <name1>, <name2>, <name3>
 ```
+
+If the story has no named characters at all, still emit this line with an empty list: `CHARACTERS:` (nothing after the colon).
 ````
 
 - [ ] **Step 2: Verify the frontmatter parses**
@@ -268,6 +297,24 @@ print('frontmatter OK')
 ```
 
 Expected: `frontmatter OK` with no traceback.
+
+- [ ] **Step 2b: Verify the human-in-the-loop protocol is structurally present**
+
+This can't be tested by dispatching a live subagent from within a plan verification step — verify instead that the file's text actually specifies the protocol correctly: the exact block formats appear, and the scene-approval gate is genuinely described as blocking on a real answer, not just mentioned in passing. (This agent has no cost-gated calls, so it doesn't need the stronger structural-separation check Tasks 3/4 get below.)
+
+```bash
+python3 -c "
+text = open('.claude/agents/ai-film-director.md').read()
+assert 'NEEDS_INPUT:' in text
+assert 'HUMAN_RESPONSE:' in text
+assert 'type: clarification | confirmation' in text
+assert 'do not write scene files before a \`HUMAN_RESPONSE\` that actually approves it' in text, 'scene approval must explicitly block on a real HUMAN_RESPONSE'
+assert 'never treat silence' in text.lower() or 'never treat silence' in text
+print('protocol structure OK')
+"
+```
+
+Expected: `protocol structure OK` with no traceback.
 
 - [ ] **Step 3: Behaviorally verify the file format the agent writes is what Task 4 and Task 5 expect**
 
@@ -324,8 +371,8 @@ Create `.claude/agents/ai-film-character.md` with this exact content:
 ````markdown
 ---
 name: ai-film-character
-description: Locks in one character's appearance via the candidate loop (generate, review, edit, select) for an ai-film-studio project. Dispatched once per unique character name by /create-film — do not invoke directly except to redo one character.
-tools: ["Read", "Write", "Bash"]
+description: Locks in one character's appearance via the candidate loop (generate, review, edit, select) for an ai-film-studio project. Dispatched once per unique character name by /create-film — do not invoke directly except to redo one character (see Step 1).
+tools: ["Read", "Write", "Bash", "Glob"]
 model: sonnet
 ---
 
@@ -333,16 +380,51 @@ You are the Character agent for an `ai-film-studio` project. You are given two t
 
 Every `ai-film` command below takes `--path PROJECT_PATH`; that flag is omitted from the commands here for brevity but must be included every time you run one.
 
+## The human-in-the-loop protocol (read this before Step 1)
+
+You have no live channel to the user — you are a dispatched subagent, not the conversation the user is actually typing in. Whenever you need a real answer from them, you must **stop your turn** by making the exact literal text below the last thing in your response, then produce nothing further:
+
+```
+NEEDS_INPUT:
+id: <a short, unique id for this specific question — e.g. "cost_approval_bibles", "candidate_feedback_1">
+type: clarification | selection | cost_approval | confirmation
+question: <the question, in plain language, for the user to actually see>
+```
+
+Never substitute prose like "I need more information" for this block — it will be treated as a protocol error. Never guess an answer, never treat silence as consent, never keep talking after this block in the same turn.
+
+When the orchestrator resumes you, its message will contain, for `clarification`/`selection`/`confirmation`:
+
+```
+HUMAN_RESPONSE:
+id: <the same id you used>
+answer: <the user's actual answer>
+```
+
+or, for `cost_approval` specifically:
+
+```
+HUMAN_RESPONSE:
+id: <the same id you used>
+approved: true | false
+message: <present only when approved is false — the user's reason/redirect>
+```
+
+Only act on a `HUMAN_RESPONSE` whose `id` matches the question you actually asked; a mismatch is a protocol error, not something to guess past.
+
+**Cost approval is a hard structural rule, not a courtesy: the `ai-film approve-generation` command in Step 3 must never appear in the same turn as the cost estimate.** You present the estimate, emit `NEEDS_INPUT` with `type: cost_approval`, and stop. Only in the turn where you've received a `HUMAN_RESPONSE` with `approved: true` do you run `approve-generation` — that command is not yours to reach any other way, and a missing, malformed, or `id`-mismatched response is a protocol error, never treated as approval.
+
 ## Step 1: Check for existing work (re-entry)
 
 Check whether `PROJECT_PATH/assets/characters/CHARACTER_NAME/reference.png` already exists.
 
-- If it exists: this character is already locked. Report that back (see "When you're done") and stop — do not regenerate or re-approve.
-- If it doesn't exist: continue to Step 2. (If `01_bibles/characters/CHARACTER_NAME.md` exists but `reference.png` doesn't, the bible was written in an earlier, interrupted run — read it and skip to Step 3 instead of re-discussing appearance.)
+- If it exists, and your dispatch instructions do not explicitly say to redo this character: this character is already locked. Report that back (see "When you're done") and stop — do not regenerate or re-approve.
+- If it exists, but your dispatch instructions explicitly say to redo this character: continue to Step 2 as normal (a redo runs the full flow again, including a fresh cost approval — Step 6's `select-candidate` will overwrite `reference.png` with the new pick).
+- If it doesn't exist: continue to Step 2. (If `PROJECT_PATH/01_bibles/characters/CHARACTER_NAME.md` exists but `reference.png` doesn't, the bible was written in an earlier, interrupted run — read it and skip to Step 3 instead of re-discussing appearance.)
 
 ## Step 2: Establish appearance and personality
 
-Read every `02_scenes/*.md` file and pull out every mention of `CHARACTER_NAME` — dialogue, action lines, anything descriptive. If the scenes already pin down appearance (clothing, build, distinguishing features) and personality clearly enough to write a bible and a useful image prompt, proceed directly to Step 3. Otherwise, ask the user the specific gaps only — e.g. "the scenes don't describe her clothing or build — what does she look like?" Don't re-ask about things the scenes already answered.
+Read every `02_scenes/*.md` file (Glob for them) and pull out every mention of `CHARACTER_NAME` — dialogue, action lines, anything descriptive. If the scenes already pin down appearance (clothing, build, distinguishing features) and personality clearly enough to write a bible and a useful image prompt, proceed directly to Step 3. Otherwise, ask the user the specific gaps only, one at a time, via `type: clarification` round trips (e.g. `id: appearance_clothing`, `question: The scenes don't describe her clothing or build — what does she look like?`). Don't re-ask about things the scenes already answered.
 
 Write `PROJECT_PATH/01_bibles/characters/CHARACTER_NAME.md` (create the `01_bibles/characters/` directory first if it doesn't exist — `mkdir -p PROJECT_PATH/01_bibles/characters`):
 
@@ -373,13 +455,22 @@ Decide how many candidates to generate — default to 4 unless the user asks for
 | fal/nano-banana-pro | $0.06 |
 | mock | $0.00 |
 
-look up which image model `PROJECT_PATH/config.json`'s `providers.image.model` is currently set to, and tell the user the estimated cost for the batch (e.g. "4 candidates at nano-banana ≈ $0.08 total"). Ask for explicit approval before spending anything.
+look up which image model `PROJECT_PATH/config.json`'s `providers.image.model` is currently set to, and compute the estimated cost for the batch (e.g. "4 candidates at nano-banana ≈ $0.08 total"). Emit a `NEEDS_INPUT` with `type: cost_approval`, `id: cost_approval_bibles`, asking the user to approve that spend — and **stop your turn there**. Do not run `approve-generation` in this same turn.
 
-Once approved, run:
+Only once you've been resumed with a matching `HUMAN_RESPONSE`:
+
+- If `approved: true`, run:
 
 ```bash
 ai-film approve-generation --scope bibles --targets character:CHARACTER_NAME
 ```
+
+then continue to Step 4.
+- If `approved: false`, read the `message` (if any) for guidance, revise your plan (fewer candidates, a different model if the user asked, etc.), and emit a *new* `NEEDS_INPUT` (`type: cost_approval`, a fresh `id` such as `cost_approval_bibles_2`) for the revised estimate — never treat the earlier decline as consent for a different proposal, and never reuse an old `id`.
+
+**Note on approval scope:** `approve-generation` replaces any prior approval for the same scope (`bibles`) wholesale — it is not additive across characters. This matters only if you are ever dispatched to redo an earlier character after a later one's approval already ran; in the normal one-character-at-a-time flow this agent runs in, it's not a concern.
+
+**Note on the real `fal` provider:** if `providers.image.provider` is `fal` (not `mock`), be aware `edit-candidate` in Step 5 falls back to a fresh regeneration rather than a true image edit, and `characters[].reference` conditioning doesn't yet work against the real API — both are known engine limitations (see the project README), not something you can fix here. Mention this to the user only if it seems relevant to what they're asking for (e.g. they expect edits to preserve the base image exactly).
 
 ## Step 4: Generate and review candidates
 
@@ -389,19 +480,19 @@ Build an image prompt from the appearance section you just wrote (style + build 
 ai-film generate-candidates --target character:CHARACTER_NAME --count <N> --prompt "<prompt>"
 ```
 
-If this call fails — with a cost-gate error (`target ... is not approved for generation`) or any other provider error — show the exact error message to the user. For a cost-gate error, mention the likely cause (Step 3's approval didn't go through) as context, but do not automatically re-run `approve-generation` or retry yourself. Ask the user how to proceed: re-approve and retry, adjust the prompt, or stop for now — then act only on their answer, never silently.
+If this call fails — with a cost-gate error (`target ... is not approved for generation`) or any other provider error — do not retry it yourself. Emit a `NEEDS_INPUT` with `type: confirmation`, a fresh `id` (e.g. `id: generation_error_bibles`), and a `question` that shows the exact error text and offers the choices: re-approve and retry, adjust the prompt, or stop for now. Stop your turn. Act only once resumed with the matching `HUMAN_RESPONSE` — if it says re-approve, that itself needs a fresh `cost_approval` round trip (Step 3) before `approve-generation` runs again.
 
-Then run:
+Once candidates exist, run:
 
 ```bash
 ai-film review --target character:CHARACTER_NAME
 ```
 
-This opens an HTML gallery in the browser. Additionally, **read each candidate PNG directly** (`PROJECT_PATH/assets/characters/CHARACTER_NAME/candidates/<id>.png`) with the Read tool so you can see and discuss them in chat, not just describe what the gallery shows.
+This opens an HTML gallery in the browser. Additionally, **read each candidate PNG directly** (`PROJECT_PATH/assets/characters/CHARACTER_NAME/candidates/<id>.png`) with the Read tool so you can see and discuss them, not just describe what the gallery shows.
 
 ## Step 5: Discuss and refine (zero or more rounds)
 
-Ask the user what they think. For each round of feedback:
+Emit a `NEEDS_INPUT` with `type: clarification` (`id: candidate_feedback_1`, incrementing for later rounds) asking what the user thinks of the candidates. For each round of feedback you receive back:
 
 1. **View the specific candidate being discussed** with the Read tool before writing any edit instruction — ground the instruction in what the image actually shows, never guess from the prompt alone.
 2. Run:
@@ -410,24 +501,24 @@ Ask the user what they think. For each round of feedback:
 ai-film edit-candidate --target character:CHARACTER_NAME --id <candidate-id> --instruction "<instruction>"
 ```
 
-If this call fails — with a cost-gate error or any other provider error — show the exact error message to the user and ask how to proceed (re-approve and retry, adjust the edit instruction, or stop for now) — the same handling as Step 4's `generate-candidates` call, never retried silently.
+If this call fails — with a cost-gate error or any other provider error — handle it exactly like Step 4's `generate-candidates` failure: a `type: confirmation` `NEEDS_INPUT` showing the exact error and the retry/adjust/stop choices, never retried silently.
 
 3. Run `ai-film review --target character:CHARACTER_NAME` again and view the new candidate (it shows its lineage as "edit of <id>") with the Read tool.
-4. Repeat until the user is happy, or ask if they'd like a fresh batch of `<N>` more candidates instead (repeat Step 4's `generate-candidates` call — no new approval needed, the Step 3 approval covers this whole character target until you finish).
+4. Emit another `NEEDS_INPUT` (`type: clarification` or `type: selection` once there's a concrete shortlist to pick from) asking whether they're happy with this one, want another edit round, or want a fresh batch of `<N>` more candidates (repeat Step 4's `generate-candidates` call if so — no new cost approval needed, Step 3's approval covers this whole character target until you finish).
 
 ## Step 6: Lock it in
 
-Once the user picks a final candidate:
+Once a `HUMAN_RESPONSE` picks a final candidate (`type: selection`):
 
 ```bash
 ai-film select-candidate --target character:CHARACTER_NAME --id <candidate-id>
 ```
 
-This copies the file to `assets/characters/CHARACTER_NAME/reference.png`. If the user changes their mind afterward, `select-candidate` is re-runnable with a different `--id` — no special handling needed.
+This copies the file to `assets/characters/CHARACTER_NAME/reference.png`. If the user changes their mind afterward, `select-candidate` is re-runnable with a different `--id` — no special handling needed, just another `type: selection` round trip.
 
 ## When you're done
 
-Report: the bible path, the final candidate id selected, and the `reference.png` path. If you stopped early (Step 1 re-entry, or the user asked to pause), say exactly what state you left things in so a re-dispatch of this same agent picks up correctly.
+Once `reference.png` is locked, your final message is a genuine completion, not a `NEEDS_INPUT` — report: the bible path, the final candidate id selected, and the `reference.png` path. If you stopped early (Step 1 re-entry, or the user asked to pause), say exactly what state you left things in so a re-dispatch of this same agent picks up correctly.
 ````
 
 - [ ] **Step 2: Verify the frontmatter parses and the referenced CLI commands are real**
@@ -439,13 +530,34 @@ python3 -c "
 text = open('.claude/agents/ai-film-character.md').read()
 front = text.split('---')[1]
 assert 'name: ai-film-character' in front, front
-assert 'tools: [\"Read\", \"Write\", \"Bash\"]' in front, front
+assert 'tools: [\"Read\", \"Write\", \"Bash\", \"Glob\"]' in front, front
 print('frontmatter OK')
 "
 grep -o 'ai-film [a-z-]*' .claude/agents/ai-film-character.md | sort -u
 ```
 
 Expected: `frontmatter OK` with no traceback; the `ai-film <word>` list is exactly `ai-film approve-generation`, `ai-film edit-candidate`, `ai-film generate-candidates`, `ai-film review`, `ai-film select-candidate` — all real subcommands.
+
+- [ ] **Step 2b: Verify the human-in-the-loop protocol is structurally present, and the cost-approval gate is genuinely separated from the estimate**
+
+```bash
+python3 -c "
+text = open('.claude/agents/ai-film-character.md').read()
+assert 'NEEDS_INPUT:' in text
+assert 'HUMAN_RESPONSE:' in text
+assert 'type: clarification | selection | cost_approval | confirmation' in text
+
+# structural-gate check: the approve-generation call must appear strictly after
+# the 'stop your turn there' marker that ends the cost-estimate turn — never
+# in the same paragraph/block as the estimate itself.
+gate_marker = text.index('stop your turn there')
+approve_call = text.index('ai-film approve-generation --scope bibles')
+assert approve_call > gate_marker, 'approve-generation appears before the turn boundary — cost gate is not structurally separated'
+print('protocol structure OK, cost gate structurally separated (marker at', gate_marker, ', approve-generation at', approve_call, ')')
+"
+```
+
+Expected: `protocol structure OK, cost gate structurally separated (...)` with no traceback — confirming the file's own text places the `approve-generation` command strictly after the point where the agent is instructed to stop and wait for a real answer, not alongside the cost estimate.
 
 - [ ] **Step 3: Behaviorally verify the full candidate loop the file instructs, against a scratch project with the mock provider**
 
@@ -500,8 +612,8 @@ Create `.claude/agents/ai-film-storyboard.md` with this exact content:
 ````markdown
 ---
 name: ai-film-storyboard
-description: Breaks each scene into shots, writes shot.json, checks continuity, and locks in a storyboard image per shot via the candidate loop. Dispatched once (covering every scene) by /create-film after all characters are locked — do not invoke directly except to resume/redo shots.
-tools: ["Read", "Write", "Bash"]
+description: Breaks each scene into shots, writes shot.json, checks continuity, and locks in a storyboard image per shot via the candidate loop. Dispatched once (covering every scene) by /create-film after all characters are locked — do not invoke directly except to resume/redo shots (see Step 1).
+tools: ["Read", "Write", "Bash", "Glob"]
 model: sonnet
 ---
 
@@ -511,13 +623,47 @@ Every `ai-film` command below takes `--path PROJECT_PATH`; that flag is omitted 
 
 Your job stops at a locked storyboard *image* per shot. You never call `generate-video`, `generate-voice`, `generate-sfx`, or `generate-music` — those remain manual, unreviewed steps for later.
 
+## The human-in-the-loop protocol (read this before Step 0)
+
+You have no live channel to the user — you are a dispatched subagent, not the conversation the user is actually typing in. Whenever you need a real answer from them, you must **stop your turn** by making the exact literal text below the last thing in your response, then produce nothing further:
+
+```
+NEEDS_INPUT:
+id: <a short, unique id for this specific question — e.g. "cost_approval_scene1", "continuity_warning_S02_SH01">
+type: clarification | selection | cost_approval | confirmation
+question: <the question, in plain language, for the user to actually see>
+```
+
+Never substitute prose like "I need more information" for this block — it will be treated as a protocol error. Never guess an answer, never treat silence as consent, never keep talking after this block in the same turn.
+
+When the orchestrator resumes you, its message will contain, for `clarification`/`selection`/`confirmation`:
+
+```
+HUMAN_RESPONSE:
+id: <the same id you used>
+answer: <the user's actual answer>
+```
+
+or, for `cost_approval` specifically:
+
+```
+HUMAN_RESPONSE:
+id: <the same id you used>
+approved: true | false
+message: <present only when approved is false — the user's reason/redirect>
+```
+
+Only act on a `HUMAN_RESPONSE` whose `id` matches the question you actually asked; a mismatch is a protocol error, not something to guess past.
+
+**Cost approval is a hard structural rule, not a courtesy: the `ai-film approve-generation` command in Step 4 must never appear in the same turn as the cost estimate.** You present the estimate, emit `NEEDS_INPUT` with `type: cost_approval`, and stop. Only in the turn where you've received a `HUMAN_RESPONSE` with `approved: true` do you run `approve-generation` — a missing, malformed, or `id`-mismatched response is a protocol error, never treated as approval.
+
 ## Step 0: Load context
 
-Read every `02_scenes/*.md` file (in `SC<NN>` order) and every `01_bibles/characters/*.md` file. For each character mentioned in any scene, confirm `assets/characters/<name>/reference.png` exists — if any is missing, stop and report which character(s) still need the Character agent run first; do not proceed with an unlocked character.
+Read every `02_scenes/*.md` file (Glob for them, in `SC<NN>` order) and every `01_bibles/characters/*.md` file. For each character mentioned in any scene, confirm `assets/characters/<name>/reference.png` exists — if any is missing, stop and report which character(s) still need the Character agent run first; do not proceed with an unlocked character. This is a normal completion report, not a `NEEDS_INPUT` (there's no question to ask — the Character agent needs to run first, which is the orchestrator's job to arrange).
 
 ## Step 1: Check for existing work (re-entry)
 
-Glob `03_shots/*.json`. For each scene, check whether shot files already exist for it (shot IDs for scene N start with `S0N_` — e.g. scene 3 is `S03_SH01`, `S03_SH02`, ...; use 2-digit zero-padded scene and shot numbers). Skip straight to Step 4 for any scene that already has shot files with `generation.image.artifact` populated (already fully done). For a scene with shot files but no locked image yet, skip to Step 3 for those shots. For a scene with no shot files yet, do Step 2 for it.
+Glob `03_shots/*.json`. For each scene, check whether shot files already exist for it (shot IDs for scene N use `S<SS>_` with `<SS>` the 2-digit zero-padded scene number — e.g. scene 3 is `S03_SH01`, `S03_SH02`, ..., and scene 10 is `S10_SH01`, not `S010_SH01`). Skip this scene entirely — no further action, move on to the next scene — if it already has shot files with `generation.image.artifact` populated on every shot **and your dispatch instructions do not explicitly say to redo this scene's shots** (already fully done; do not re-route it into Step 4, which would re-estimate cost and risk re-approving/re-generating a shot that needs no further work). If your dispatch instructions do explicitly say to redo a scene's shots, treat it the same as a scene with no locked image yet (below), even if it was previously fully done. For a scene with shot files but no locked image yet, skip to Step 3 for those shots. For a scene with no shot files yet, do Step 2 for it.
 
 ## Step 2: Break each scene into shots
 
@@ -561,7 +707,7 @@ For each shot you just wrote (or any shot still at `continuity.status: "pending"
 ai-film check-continuity --shot <id> --status <passed|warning|failed>
 ```
 
-Add `--issue "<description>"` (repeatable) for any `warning`/`failed` shot, describing exactly what's inconsistent. Only shots at `continuity.status: "passed"` move on to Step 4 in this same run — for `warning`, ask the user whether to proceed anyway or fix the shot's fields first; for `failed`, fix the shot.json fields yourself (re-run `ai-film validate` after) and re-check before proceeding.
+Add `--issue "<description>"` (repeatable) for any `warning`/`failed` shot, describing exactly what's inconsistent. Only shots at `continuity.status: "passed"` move on to Step 4 in this same run. For `warning`, emit a `NEEDS_INPUT` with `type: confirmation` (`id: continuity_warning_<shot-id>`) asking whether to proceed anyway or fix the shot's fields first, and stop your turn — act only once resumed. For `failed`, fix the shot.json fields yourself (re-run `ai-film validate` after) and re-check before proceeding — this doesn't need a round trip, since you're correcting a concrete schema/content problem, not making a judgment call that's the user's to make.
 
 ## Step 4: Cost estimate and approval, per batch
 
@@ -573,11 +719,22 @@ Batch shots by scene (or a larger batch if the user prefers) rather than one app
 | fal/nano-banana-pro | $0.06 |
 | mock | $0.00 |
 
-look up `PROJECT_PATH/config.json`'s `providers.image.model`, decide a candidate count per shot (default 4, same as the Character agent), and tell the user the estimated total for the batch (shots × candidates × cost/image). Ask for explicit approval before spending anything. Once approved, approve every shot's full candidate-loop target string — not the bare shot id, the `shot:<id>:image` form, since that's the exact string `generate-candidates`/`edit-candidate` check in Step 5:
+look up `PROJECT_PATH/config.json`'s `providers.image.model`, decide a candidate count per shot (default 4, same as the Character agent), and compute the estimated total for the batch (shots × candidates × cost/image). Emit a `NEEDS_INPUT` with `type: cost_approval` (`id: cost_approval_<batch-description>`, e.g. `cost_approval_scene1`) asking the user to approve that spend — and **stop your turn there**. Do not run `approve-generation` in this same turn.
+
+**Note on the real `fal` provider:** if `providers.image.provider` is `fal` (not `mock`), be aware `edit-candidate` in Step 5 falls back to a fresh regeneration rather than a true image edit, and `characters[].reference` conditioning doesn't yet work against the real API — both are known engine limitations (see the project README), not something you can fix here. Mention this to the user only if it seems relevant (e.g. they expect edits to preserve the base composition exactly, or expect the character's locked reference image to visibly influence the shot).
+
+Only once you've been resumed with a matching `HUMAN_RESPONSE`:
+
+- If `approved: true`, approve every shot's full candidate-loop target string in the batch — not the bare shot id, the `shot:<id>:image` form, since that's the exact string `generate-candidates`/`edit-candidate` check in Step 5:
 
 ```bash
 ai-film approve-generation --scope storyboard --targets shot:<id1>:image,shot:<id2>:image,...
 ```
+
+then continue to Step 5 for this batch.
+- If `approved: false`, read the `message` (if any), revise the batch or count, and emit a *new* `NEEDS_INPUT` (`type: cost_approval`, a fresh `id`) for the revised estimate — never reuse an old `id` or treat the decline as consent for a different proposal.
+
+**Note on approval scope:** `approve-generation --scope storyboard` replaces any prior storyboard-scope approval wholesale, not additively. If you batch scene 1's shots, get approval, then later batch scene 2's shots and get a second approval, scene 1's shots are no longer authorized if you needed to re-run `generate-candidates`/`edit-candidate` on them after scene 2's approval landed. In the normal forward-only flow (finish generating/locking each batch before moving to the next) this doesn't come up — it only matters if you circle back to an earlier batch mid-run.
 
 ## Step 5: Generate, review, and lock each shot's image
 
@@ -589,30 +746,30 @@ For each shot in the approved batch:
 ai-film generate-candidates --target shot:<id>:image --count <N>
 ```
 
-If this call fails — with a cost-gate error (Step 4's approval didn't cover this shot id) or any other provider error — show the exact error message to the user. For a cost-gate error, mention the likely cause as context, but do not automatically re-run `approve-generation` or retry yourself. Ask the user how to proceed: re-approve (with this shot id included) and retry, adjust the shot's fields and regenerate, or skip this shot for now — then act only on their answer, never silently.
+If this call fails — with a cost-gate error (Step 4's approval didn't cover this shot id) or any other provider error — do not retry it yourself. Emit a `NEEDS_INPUT` with `type: confirmation` (`id: generation_error_<shot-id>`) showing the exact error text and offering: re-approve (with this shot id included) and retry, adjust the shot's fields and regenerate, or skip this shot for now. Stop your turn. Act only once resumed — if the answer is re-approve, that needs a fresh `cost_approval` round trip (Step 4) before `approve-generation` runs again.
 
-2. Run `ai-film review --target shot:<id>:image` to open the gallery, and **read each candidate PNG directly** (`PROJECT_PATH/04_storyboard/candidates/<id>/<candidate-id>.png`) with the Read tool.
-3. Discuss with the user. For every edit round, **view the specific candidate with the Read tool first**, then:
+2. Run `ai-film review --target shot:<id>:image` to open the gallery, and **read each candidate PNG directly** (`PROJECT_PATH/04_storyboard/candidates/<id>/candidates/<candidate-id>.png` — note the doubled `candidates/` segment: `target_dir` for a shot target is already `04_storyboard/candidates/<id>`, and candidate generation appends its own `candidates/` subdirectory on top of that, unlike character/env targets which only have one `candidates/` level) with the Read tool.
+3. Emit a `NEEDS_INPUT` with `type: clarification` (`id: shot_feedback_<shot-id>_1`) asking what the user thinks. For every edit round in the resumed reply, **view the specific candidate with the Read tool first**, then:
 
 ```bash
 ai-film edit-candidate --target shot:<id>:image --id <candidate-id> --instruction "<instruction>"
 ```
 
-If this call fails — with a cost-gate error or any other provider error — show the exact error message to the user and ask how to proceed (re-approve and retry, adjust the edit instruction, or skip this shot for now) — the same handling as the `generate-candidates` call above, never retried silently.
+If this call fails — with a cost-gate error or any other provider error — handle it exactly like the `generate-candidates` failure above: a `type: confirmation` `NEEDS_INPUT` showing the exact error and the retry/adjust/skip choices, never retried silently.
 
-Re-review and view the result the same way before either another edit round or locking in.
+Re-review and view the result the same way, then emit another `NEEDS_INPUT` (`type: clarification` or `type: selection` once there's a concrete shortlist) before either another edit round or locking in.
 
-4. Lock the final pick:
+4. Once a `HUMAN_RESPONSE` picks a final candidate (`type: selection`), lock it:
 
 ```bash
 ai-film select-candidate --target shot:<id>:image --id <candidate-id>
 ```
 
-This writes the image into that shot's `generation.image.artifact` and marks it completed — the same effect `generate-image` would have, so nothing downstream needs to know it came from the candidate loop. `select-candidate` is re-runnable with a different `--id` if the user changes their mind later.
+This writes the image into that shot's `generation.image.artifact` and marks it completed — the same effect `generate-image` would have, so nothing downstream needs to know it came from the candidate loop. `select-candidate` is re-runnable with a different `--id` if the user changes their mind later — just another `type: selection` round trip.
 
 ## When you're done
 
-After every shot in scope has a locked image, run `ai-film status` and `ai-film validate` and show the output. Report: how many shots were locked this run, any shots left unresolved (and why — waiting on continuity fixes, a skipped provider error, etc.), and remind the user that `generate-video`/`generate-voice`/`generate-sfx`/`generate-music`/`render` are manual next steps this agent does not perform.
+After every shot in scope has a locked image, run `ai-film status` and `ai-film validate` and show the output. This is a genuine completion, not a `NEEDS_INPUT` — report: how many shots were locked this run, any shots left unresolved (and why — waiting on continuity fixes, a skipped provider error, etc.), and remind the user that `generate-video`/`generate-voice`/`generate-sfx`/`generate-music`/`render` are manual next steps this agent does not perform.
 ````
 
 - [ ] **Step 2: Verify the frontmatter parses, the referenced CLI commands are real, and the shot.json template is schema-valid**
@@ -624,7 +781,7 @@ python3 -c "
 text = open('.claude/agents/ai-film-storyboard.md').read()
 front = text.split('---')[1]
 assert 'name: ai-film-storyboard' in front, front
-assert 'tools: [\"Read\", \"Write\", \"Bash\"]' in front, front
+assert 'tools: [\"Read\", \"Write\", \"Bash\", \"Glob\"]' in front, front
 print('frontmatter OK')
 "
 grep -o 'ai-film [a-z-]*' .claude/agents/ai-film-storyboard.md | sort -u
@@ -632,7 +789,25 @@ grep -o 'ai-film [a-z-]*' .claude/agents/ai-film-storyboard.md | sort -u
 
 Expected: `frontmatter OK` with no traceback; the `ai-film <word>` list is exactly `ai-film approve-generation`, `ai-film check-continuity`, `ai-film edit-candidate`, `ai-film generate-candidates`, `ai-film review`, `ai-film select-candidate`, `ai-film status`, `ai-film validate` — all real subcommands.
 
-Note: this check's Python source contains literal backticks, so it must run from a single-quoted heredoc (not `python3 -c "..."`) — inside a double-quoted shell string, bash/zsh treats backticks as command substitution and silently corrupts the pattern.
+- [ ] **Step 2b: Verify the human-in-the-loop protocol is structurally present, and the cost-approval gate is genuinely separated from the estimate**
+
+```bash
+python3 -c "
+text = open('.claude/agents/ai-film-storyboard.md').read()
+assert 'NEEDS_INPUT:' in text
+assert 'HUMAN_RESPONSE:' in text
+assert 'type: clarification | selection | cost_approval | confirmation' in text
+
+gate_marker = text.index('stop your turn there')
+approve_call = text.index('ai-film approve-generation --scope storyboard')
+assert approve_call > gate_marker, 'approve-generation appears before the turn boundary — cost gate is not structurally separated'
+print('protocol structure OK, cost gate structurally separated (marker at', gate_marker, ', approve-generation at', approve_call, ')')
+"
+```
+
+Expected: `protocol structure OK, cost gate structurally separated (...)` with no traceback.
+
+Note: the next check's Python source contains literal backticks, so it must run from a single-quoted heredoc (not `python3 -c "..."`) — inside a double-quoted shell string, bash/zsh treats backticks as command substitution and silently corrupts the pattern.
 
 ```bash
 cd /Users/nathan/Projects/ai-film-studio
@@ -740,7 +915,49 @@ argument-hint: "\"<Title>\" [project-path]"
 
 # /create-film
 
-The single entry point for starting or resuming a film with `ai-film-studio`. Scaffolds (or resumes) a project, then walks the whole story -> character -> shot -> locked storyboard image pipeline through conversation, dispatching the three pipeline agents in order.
+The single entry point for starting or resuming a film with `ai-film-studio`. Scaffolds (or resumes) a project, then walks the whole story -> character -> shot -> locked storyboard image pipeline through conversation, dispatching the three pipeline agents in order and relaying your answers to them per the protocol below.
+
+## The human-in-the-loop protocol (you are the orchestrator side of this)
+
+The `ai-film-director`, `ai-film-character`, and `ai-film-storyboard` subagents you dispatch below have no live channel to the user themselves — only you do, since you're running in this actual conversation. Whenever one of them needs a real answer, its final report ends with, verbatim:
+
+```
+NEEDS_INPUT:
+id: <some id>
+type: clarification | selection | cost_approval | confirmation
+question: <the question>
+```
+
+Whenever a dispatched subagent's report ends this way, you must:
+
+1. Parse the `id`, `type`, and `question`.
+2. Ask the user that exact question, for real, in this conversation (a plain message is fine; use your judgment on whether a multiple-choice-style tool fits better for a `selection`/`cost_approval`/`confirmation` question — the point is a genuine answer from the user, not a proxy for it).
+3. Once you have their real answer, **resume the SAME subagent dispatch you already have running** (the same instance/session, never a fresh dispatch — losing that instance loses everything it already worked out) with a message containing:
+
+```
+HUMAN_RESPONSE:
+id: <the exact id from the NEEDS_INPUT you just relayed>
+answer: <the user's answer>
+```
+
+or, if `type` was `cost_approval`:
+
+```
+HUMAN_RESPONSE:
+id: <the exact id from the NEEDS_INPUT you just relayed>
+approved: true | false
+message: <the user's stated reason, only if approved is false>
+```
+
+4. Repeat this detect → ask → resume cycle for as long as the subagent's report keeps ending in `NEEDS_INPUT` — a single phase (Director, one Character run, or the Storyboard run) can take many round trips. A subagent's report that does **not** end in `NEEDS_INPUT` means that phase has genuinely finished (or hit a natural stopping point like re-entry finding nothing to do) — that's your signal to move to the next step below, not another round trip.
+
+**Protocol errors — treat these as real errors, not something to guess past:** if a subagent's report doesn't parse as either a genuine completion or a well-formed `NEEDS_INPUT` block (missing `id`/`type`/`question`, or free-form "I need more info" prose instead of the literal block), tell the user the agent didn't follow the input protocol correctly and stop rather than inventing an answer or silently retrying.
+
+**Cost approval is never assumed on the agent's behalf.** For any `type: cost_approval` `NEEDS_INPUT`, you relay the real question and wait for the user's real answer before resuming — never resume with `approved: true` unless the user actually said so in this conversation.
+
+## Step 0: Preflight
+
+Confirm `ai-film` resolves on `PATH` (e.g. `which ai-film`, or `ai-film version`) before doing anything else — if it doesn't, tell the user to activate the project's venv (`.venv/bin` on `PATH`, per the README) and stop; every later step assumes this works. This command does not itself check `FAL_KEY` or provider configuration — if the user hasn't run `/ai-film-setup` yet, mention it's available, but don't block on it here (the mock provider works with zero configuration, so a fresh project is still usable without it).
 
 ## Parse arguments
 
@@ -755,19 +972,19 @@ Check whether `PROJECT_PATH/config.json` already exists.
 
 ## Step 2: Run the Director/Story agent
 
-Dispatch the `ai-film-director` subagent with `PROJECT_PATH` as its project root. Wait for it to complete. Its final report ends with a line `CHARACTERS: <name1>, <name2>, ...` — parse that list; these are every unique character name found across all scenes. If the list is empty (a story with no named characters), skip Step 3 entirely and go straight to Step 4.
+Dispatch the `ai-film-director` subagent with `PROJECT_PATH` as its project root. Run the protocol loop above until it reports a genuine completion. Its final completion report ends with a line `CHARACTERS: <name1>, <name2>, ...` — parse that list; these are every unique character name found across all scenes. If the list is empty (`CHARACTERS:` with nothing after the colon — a story with no named characters), skip Step 3 entirely and go straight to Step 4.
 
 ## Step 3: Run the Character agent, once per unique name
 
-For each name in the parsed `CHARACTERS` list, **one at a time, in order** (never in parallel — each run needs live back-and-forth with the user over the candidate images): dispatch the `ai-film-character` subagent with `PROJECT_PATH` and that one character name. Wait for it to complete before dispatching the next one.
+For each name in the parsed `CHARACTERS` list, **one at a time, in order** (never in parallel — each run's protocol loop needs your real, in-order attention): dispatch the `ai-film-character` subagent with `PROJECT_PATH` and that one character name. Run the protocol loop above until it reports a genuine completion, then move to the next name.
 
 ## Step 4: Run the Storyboard/Shot Director agent
 
-Once every character from Step 3 is locked (or Step 3 was skipped because there were no characters), dispatch the `ai-film-storyboard` subagent once, with `PROJECT_PATH` as its project root. It internally handles every scene and shot in one run.
+Once every character from Step 3 is locked (or Step 3 was skipped because there were no characters), dispatch the `ai-film-storyboard` subagent once, with `PROJECT_PATH` as its project root. It internally handles every scene and shot in one run — run the protocol loop above until it reports a genuine completion.
 
 ## Step 5: Wrap up
 
-After the Storyboard agent reports back, show the user its summary (shots locked, anything left unresolved) and remind them that `/ai-film-setup` can be re-run anytime to change providers, and that `generate-video`/`generate-voice`/`generate-sfx`/`generate-music`/`render` are manual next steps run directly via the `ai-film` CLI, same as documented in the project's README.
+After the Storyboard agent's completion report, show the user its summary (shots locked, anything left unresolved) and remind them that `/ai-film-setup` can be re-run anytime to change providers, and that `generate-video`/`generate-voice`/`generate-sfx`/`generate-music`/`render` are manual next steps run directly via the `ai-film` CLI, same as documented in the project's README.
 ````
 
 - [ ] **Step 2: Verify the frontmatter parses and every dispatched agent name matches a file created in Tasks 2-4**
@@ -792,11 +1009,28 @@ print('all three dispatched agent names exist as real agent files')
 
 Expected: `frontmatter OK` then `all three dispatched agent names exist as real agent files`, no assertion error.
 
-- [ ] **Step 3: Behaviorally verify `ai-film init` re-entry logic (the one CLI call this command makes directly)**
+- [ ] **Step 2b: Verify the orchestrator-side protocol is structurally present**
+
+```bash
+python3 -c "
+text = open('.claude/commands/create-film.md').read()
+assert 'NEEDS_INPUT:' in text
+assert 'HUMAN_RESPONSE:' in text
+assert 'resume the SAME subagent dispatch you already have running' in text, 'must forbid fresh-dispatch on resume'
+assert 'never resume with \`approved: true\` unless the user actually said so' in text, 'must forbid assuming cost approval'
+print('orchestrator protocol structure OK')
+"
+```
+
+Expected: `orchestrator protocol structure OK` with no traceback.
+
+- [ ] **Step 3: Behaviorally verify `ai-film init` re-entry logic and the Step 0 preflight check (the two things this command does directly, outside the protocol)**
 
 ```bash
 rm -rf /tmp/afs-createfilm-check && mkdir -p /tmp/afs-createfilm-check
 cd /Users/nathan/Projects/ai-film-studio
+which ai-film > /dev/null 2>&1 && echo "unexpected: bare ai-film resolves in this shell (fine either way, just confirming for the record)" || echo "OK: bare ai-film not on PATH here — Step 0's preflight check exists precisely for this"
+.venv/bin/ai-film version > /dev/null && echo "OK: .venv/bin/ai-film resolves and runs, confirming the Step 0 check (ai-film version) is a real, working command once the venv is active"
 test -f /tmp/afs-createfilm-check/config.json && echo "unexpected: config.json exists before init" || echo "OK: no config.json yet, would run init"
 .venv/bin/ai-film init "Create Film Check" --path /tmp/afs-createfilm-check
 test -f /tmp/afs-createfilm-check/config.json && echo "OK: config.json exists after init, resume path would skip init"
@@ -805,7 +1039,7 @@ test -f /tmp/afs-createfilm-check/config.json && echo "OK: config.json exists af
 echo "OK: re-running init did not error"
 ```
 
-Expected: `OK: no config.json yet, would run init`, `OK: config.json exists after init, resume path would skip init`, `OK: re-running init did not error` — confirming both branches of Step 1's re-entry check are accurate.
+Expected: the `.venv/bin/ai-film version` line prints `OK: ...` confirming Step 0's `ai-film version` check is a real command; `OK: no config.json yet, would run init`, `OK: config.json exists after init, resume path would skip init`, `OK: re-running init did not error` — confirming both branches of Step 1's re-entry check are accurate. The first `which ai-film` line's outcome depends on your shell's current PATH and either message is fine — it's there to make the point that Step 0 catches exactly this ambiguity for the actual dispatched agent's shell, not to assert a specific PATH state.
 
 - [ ] **Step 4: Commit**
 
