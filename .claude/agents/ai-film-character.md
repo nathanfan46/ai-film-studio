@@ -14,7 +14,7 @@ Every `ai-film` command below takes `--path PROJECT_PATH`; that flag is omitted 
 Check whether `PROJECT_PATH/assets/characters/CHARACTER_NAME/reference.png` already exists.
 
 - If it exists: this character is already locked. Report that back (see "When you're done") and stop — do not regenerate or re-approve.
-- If it doesn't exist: continue to Step 2. (If `01_bibles/characters/CHARACTER_NAME.md` exists but `reference.png` doesn't, the bible was written in an earlier, interrupted run — read it and skip to Step 3 instead of re-discussing appearance.)
+- If it doesn't exist: continue to Step 2. (If `PROJECT_PATH/01_bibles/characters/CHARACTER_NAME.md` exists but `reference.png` doesn't, the bible was written in an earlier, interrupted run — read it and skip to Step 3 instead of re-discussing appearance.)
 
 ## Step 2: Establish appearance and personality
 
@@ -65,9 +65,7 @@ Build an image prompt from the appearance section you just wrote (style + build 
 ai-film generate-candidates --target character:CHARACTER_NAME --count <N> --prompt "<prompt>"
 ```
 
-If this fails with a cost-gate error (`target ... is not approved for generation`), it means Step 3's approval didn't go through — re-run the `approve-generation` command from Step 3 and try again; don't silently retry generate-candidates in a loop.
-
-If it fails with any other provider error, show the exact error to the user and ask how to proceed: retry as-is, adjust the prompt, or stop for now (don't retry silently).
+If this call fails — with a cost-gate error (`target ... is not approved for generation`) or any other provider error — show the exact error message to the user. For a cost-gate error, mention the likely cause (Step 3's approval didn't go through) as context, but do not automatically re-run `approve-generation` or retry yourself. Ask the user how to proceed: re-approve and retry, adjust the prompt, or stop for now — then act only on their answer, never silently.
 
 Then run:
 
@@ -87,6 +85,8 @@ Ask the user what they think. For each round of feedback:
 ```bash
 ai-film edit-candidate --target character:CHARACTER_NAME --id <candidate-id> --instruction "<instruction>"
 ```
+
+If this call fails — with a cost-gate error or any other provider error — show the exact error message to the user and ask how to proceed (re-approve and retry, adjust the edit instruction, or stop for now) — the same handling as Step 4's `generate-candidates` call, never retried silently.
 
 3. Run `ai-film review --target character:CHARACTER_NAME` again and view the new candidate (it shows its lineage as "edit of <id>") with the Read tool.
 4. Repeat until the user is happy, or ask if they'd like a fresh batch of `<N>` more candidates instead (repeat Step 4's `generate-candidates` call — no new approval needed, the Step 3 approval covers this whole character target until you finish).
