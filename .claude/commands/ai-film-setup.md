@@ -25,7 +25,7 @@ If not set, tell the user real generation will fail until they run `export FAL_K
 
 For each capability in this exact order — `image`, `video`, `voice`, `sfx`, `music` — do:
 
-1. Run `ai-film models --capability <capability> --path PROJECT_PATH` and show the output verbatim (each line is `<provider>/<model>  <display name>`).
+1. Run `ai-film models --capability <capability>` and show the output verbatim (each line is `<provider>/<model>  <display name>`).
 2. Also mention `mock` is always available for that capability (for free, offline testing) even though it won't appear in the `ai-film models` catalog output (that command only lists real fal.ai models).
 3. Ask the user to pick a provider+model for this capability, or say "keep current" to leave it unchanged. Show the current pick from `PROJECT_PATH/config.json`'s `providers.<capability>` first so "keep current" is a real option.
 
