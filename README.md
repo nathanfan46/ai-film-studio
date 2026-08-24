@@ -5,9 +5,10 @@ pipeline. It scaffolds a project directory, tracks each shot's generation lifecy
 (image, video, voice, sfx, music) through a JSON shot store with a cost-gated approval
 workflow, and renders the completed shots into a final video with ffmpeg.
 
-There is currently no agent layer that writes shots for you — you hand-write `shot.json`
-files (or a future Skill/Agents layer will do this; see Roadmap below). This CLI is the
-production engine underneath that layer.
+`/create-film` (a Claude Code slash command) conducts story, character, and shot
+creation through conversation and writes `shot.json` for you — see Roadmap below.
+This CLI is the production engine underneath that layer, and remains fully usable
+directly for anyone who prefers hand-authoring shots.
 
 ## 1. Install
 
@@ -206,16 +207,17 @@ implementation history.
 
 ## Roadmap
 
-The next piece is a Claude Code Skill + Agent layer (`.claude/skills/ai-film/`,
-Director/Storyboard/Continuity/Editor agents, `/create-film` and `/ai-film-setup`
-commands) that writes `shot.json` files for you from a story prompt — and conducts
-the candidate review conversation above on your behalf ("here are 4 options, which
-do you like?") — instead of you hand-authoring shots and running the candidate
-commands yourself. Per `docs/superpowers/specs/2026-08-18-ai-film-studio-design.md`.
-That plan is written but not yet implemented.
+The Claude Code Agent layer is implemented: `/ai-film-setup` configures providers,
+`/create-film "Title"` scaffolds a project and walks the whole story -> character ->
+shot -> reviewed-storyboard-image pipeline through conversation, dispatching the
+`ai-film-director`, `ai-film-character`, and `ai-film-storyboard` subagents in turn.
+See `docs/superpowers/specs/2026-08-23-agent-layer-design.md` and
+`docs/superpowers/plans/2026-08-23-agent-layer.md` for the design and implementation
+history.
 
-Beyond that, per `docs/superpowers/specs/2026-08-22-human-interaction-model-design.md`'s
-Future Extensions: video/audio candidate review (the same four commands, applied to
-`shot:<id>:video`/`voice`/`sfx`/`music` targets), a whole-film final-cut preview
-reusing `review`, and interactive (clickable) browser review if text-based picking
-proves too slow in practice.
+Per that spec's Future Extensions: a dedicated Continuity agent if shot volume ever
+justifies a second independent-context pass, video/audio candidate review once the
+engine gains video candidate storage and an edit/regenerate loop for clips, voice/
+sfx/music generation agents and an Editor agent for final assembly, and a
+programmatic cost-estimation engine in `ai_film` replacing the static per-model
+prompt-knowledge table the agents use today.
