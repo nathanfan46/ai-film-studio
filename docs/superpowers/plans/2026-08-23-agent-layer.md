@@ -82,7 +82,7 @@ If not set, tell the user real generation will fail until they run `export FAL_K
 
 For each capability in this exact order — `image`, `video`, `voice`, `sfx`, `music` — do:
 
-1. Run `ai-film models --capability <capability> --path PROJECT_PATH` and show the output verbatim (each line is `<provider>/<model>  <display name>`).
+1. Run `ai-film models --capability <capability>` and show the output verbatim (each line is `<provider>/<model>  <display name>`). Note: unlike every other `ai-film` subcommand, `models` takes no `--path` — it lists a static provider catalog, not project-specific data — passing `--path` here fails with `No such option: --path`.
 2. Also mention `mock` is always available for that capability (for free, offline testing) even though it won't appear in the `ai-film models` catalog output (that command only lists real fal.ai models).
 3. Ask the user to pick a provider+model for this capability, or say "keep current" to leave it unchanged. Show the current pick from `PROJECT_PATH/config.json`'s `providers.<capability>` first so "keep current" is a real option.
 
@@ -130,7 +130,7 @@ Expected output is exactly `ai-film approve-generation`, `ai-film init`, and `ai
 rm -rf /tmp/afs-setup-check && mkdir -p /tmp/afs-setup-check
 cd /Users/nathan/Projects/ai-film-studio
 .venv/bin/ai-film init "Setup Check" --path /tmp/afs-setup-check
-.venv/bin/ai-film models --capability image --path /tmp/afs-setup-check
+.venv/bin/ai-film models --capability image
 python3 -c "
 import json
 cfg = json.load(open('/tmp/afs-setup-check/config.json'))
@@ -389,9 +389,7 @@ Build an image prompt from the appearance section you just wrote (style + build 
 ai-film generate-candidates --target character:CHARACTER_NAME --count <N> --prompt "<prompt>"
 ```
 
-If this fails with a cost-gate error (`target ... is not approved for generation`), it means Step 3's approval didn't go through — re-run the `approve-generation` command from Step 3 and try again; don't silently retry generate-candidates in a loop.
-
-If it fails with any other provider error, show the exact error to the user and ask how to proceed: retry as-is, adjust the prompt, or stop for now (don't retry silently).
+If this call fails — with a cost-gate error (`target ... is not approved for generation`) or any other provider error — show the exact error message to the user. For a cost-gate error, mention the likely cause (Step 3's approval didn't go through) as context, but do not automatically re-run `approve-generation` or retry yourself. Ask the user how to proceed: re-approve and retry, adjust the prompt, or stop for now — then act only on their answer, never silently.
 
 Then run:
 
@@ -411,6 +409,8 @@ Ask the user what they think. For each round of feedback:
 ```bash
 ai-film edit-candidate --target character:CHARACTER_NAME --id <candidate-id> --instruction "<instruction>"
 ```
+
+If this call fails — with a cost-gate error or any other provider error — show the exact error message to the user and ask how to proceed (re-approve and retry, adjust the edit instruction, or stop for now) — the same handling as Step 4's `generate-candidates` call, never retried silently.
 
 3. Run `ai-film review --target character:CHARACTER_NAME` again and view the new candidate (it shows its lineage as "edit of <id>") with the Read tool.
 4. Repeat until the user is happy, or ask if they'd like a fresh batch of `<N>` more candidates instead (repeat Step 4's `generate-candidates` call — no new approval needed, the Step 3 approval covers this whole character target until you finish).
@@ -589,7 +589,7 @@ For each shot in the approved batch:
 ai-film generate-candidates --target shot:<id>:image --count <N>
 ```
 
-If this fails with a cost-gate error, Step 4's approval didn't cover this shot id — re-run `approve-generation` with the full batch (including this id) and retry. For any other provider error, show it to the user and ask how to proceed (retry, adjust the shot's fields and re-generate, or skip this shot for now) rather than retrying silently.
+If this call fails — with a cost-gate error (Step 4's approval didn't cover this shot id) or any other provider error — show the exact error message to the user. For a cost-gate error, mention the likely cause as context, but do not automatically re-run `approve-generation` or retry yourself. Ask the user how to proceed: re-approve (with this shot id included) and retry, adjust the shot's fields and regenerate, or skip this shot for now — then act only on their answer, never silently.
 
 2. Run `ai-film review --target shot:<id>:image` to open the gallery, and **read each candidate PNG directly** (`PROJECT_PATH/04_storyboard/candidates/<id>/<candidate-id>.png`) with the Read tool.
 3. Discuss with the user. For every edit round, **view the specific candidate with the Read tool first**, then:
@@ -597,6 +597,8 @@ If this fails with a cost-gate error, Step 4's approval didn't cover this shot i
 ```bash
 ai-film edit-candidate --target shot:<id>:image --id <candidate-id> --instruction "<instruction>"
 ```
+
+If this call fails — with a cost-gate error or any other provider error — show the exact error message to the user and ask how to proceed (re-approve and retry, adjust the edit instruction, or skip this shot for now) — the same handling as the `generate-candidates` call above, never retried silently.
 
 Re-review and view the result the same way before either another edit round or locking in.
 
