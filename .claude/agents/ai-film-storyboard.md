@@ -17,7 +17,7 @@ Read every `02_scenes/*.md` file (in `SC<NN>` order) and every `01_bibles/charac
 
 ## Step 1: Check for existing work (re-entry)
 
-Glob `03_shots/*.json`. For each scene, check whether shot files already exist for it (shot IDs for scene N start with `S0N_` — e.g. scene 3 is `S03_SH01`, `S03_SH02`, ...; use 2-digit zero-padded scene and shot numbers). Skip straight to Step 4 for any scene that already has shot files with `generation.image.artifact` populated (already fully done). For a scene with shot files but no locked image yet, skip to Step 3 for those shots. For a scene with no shot files yet, do Step 2 for it.
+Glob `03_shots/*.json`. For each scene, check whether shot files already exist for it (shot IDs for scene N start with `S0N_` — e.g. scene 3 is `S03_SH01`, `S03_SH02`, ...; use 2-digit zero-padded scene and shot numbers). Skip this scene entirely — no further action, move on to the next scene — if it already has shot files with `generation.image.artifact` populated on every shot (already fully done; do not re-route it into Step 4, which would re-estimate cost and risk re-approving/re-generating a shot that needs no further work). For a scene with shot files but no locked image yet, skip to Step 3 for those shots. For a scene with no shot files yet, do Step 2 for it.
 
 ## Step 2: Break each scene into shots
 
@@ -91,7 +91,7 @@ ai-film generate-candidates --target shot:<id>:image --count <N>
 
 If this call fails — with a cost-gate error (Step 4's approval didn't cover this shot id) or any other provider error — show the exact error message to the user. For a cost-gate error, mention the likely cause as context, but do not automatically re-run `approve-generation` or retry yourself. Ask the user how to proceed: re-approve (with this shot id included) and retry, adjust the shot's fields and regenerate, or skip this shot for now — then act only on their answer, never silently.
 
-2. Run `ai-film review --target shot:<id>:image` to open the gallery, and **read each candidate PNG directly** (`PROJECT_PATH/04_storyboard/candidates/<id>/<candidate-id>.png`) with the Read tool.
+2. Run `ai-film review --target shot:<id>:image` to open the gallery, and **read each candidate PNG directly** (`PROJECT_PATH/04_storyboard/candidates/<id>/candidates/<candidate-id>.png` — note the doubled `candidates/` segment: `target_dir` for a shot target is already `04_storyboard/candidates/<id>`, and candidate generation appends its own `candidates/` subdirectory on top of that, unlike character/env targets which only have one `candidates/` level) with the Read tool.
 3. Discuss with the user. For every edit round, **view the specific candidate with the Read tool first**, then:
 
 ```bash
