@@ -73,6 +73,8 @@ ai-film status --path ~/my-film
 ai-film render --path ~/my-film
 ```
 
+Note: `generate-image`/`generate-video` (direct generation, shown above) don't currently check the approval recorded here — only the candidate-loop commands in §3 below (`generate-candidates`/`edit-candidate`) enforce it, and they're strict about the exact target string: `approve-generation --targets` must match the `--target` you'll pass to `generate-candidates` character-for-character (a bare shot id like `S01_SH01` does not authorize `shot:S01_SH01:image` — see §3).
+
 `ai-film status --path ~/my-film` should report `S01_SH01  completed`, and
 `~/my-film/final/reel_001.mp4` should exist and be playable.
 
@@ -177,7 +179,7 @@ assets/                     # reference images (characters, environments, props,
 00_story/ 01_bibles/ 02_scenes/
 03_shots/                    # SH*.json — the shot.json contract, hand-authored today
 04_storyboard/                # generated images
-  candidates/<shot_id>/        # candidate images for that shot's storyboard, pre-selection
+  candidates/<shot_id>/candidates/  # candidate images for that shot's storyboard, pre-selection — note the doubled "candidates/" (target_dir already includes one level; candidate generation adds its own subdirectory on top)
 05_video/                     # generated video clips
 06_audio/{dialogue,sfx,music}/
 final/                        # rendered reel_001.mp4 lands here
@@ -214,6 +216,18 @@ shot -> reviewed-storyboard-image pipeline through conversation, dispatching the
 See `docs/superpowers/specs/2026-08-23-agent-layer-design.md` and
 `docs/superpowers/plans/2026-08-23-agent-layer.md` for the design and implementation
 history.
+
+**To use it:** the `/ai-film-setup` and `/create-film` commands and their three
+agents live in this repo's own `.claude/commands/` and `.claude/agents/` — Claude
+Code only discovers project-local commands/agents when you run `claude` from a
+directory whose `.claude/` contains them. Run `claude` from this repo checkout to
+use them (the film project itself doesn't have to live here — `/create-film "Title"
+[path]` takes the destination path as an argument, defaulting to `./<slugified-
+title>` inside wherever you ran `claude` from). To use these commands from a
+different working directory or a separate film-only repo, copy or symlink
+`.claude/commands/ai-film-setup.md`, `.claude/commands/create-film.md`, and the
+three files under `.claude/agents/` into that directory's own `.claude/` (or into
+`~/.claude/commands/` and `~/.claude/agents/` to make them available everywhere).
 
 Per that spec's Future Extensions: a dedicated Continuity agent if shot volume ever
 justifies a second independent-context pass, video/audio candidate review once the
