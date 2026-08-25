@@ -212,14 +212,18 @@ message: <optional — only when approved is false, carries your reason/redirect
 This is the one place in the protocol with an extra, non-negotiable rule,
 because it guards real spend:
 
-- **The Bash instruction to call `ai-film approve-generation` (or any
-  `generate-candidates`/`edit-candidate` call gated by it) never appears in the
-  same subagent turn that proposes the cost estimate.** It only exists in the
-  turn the orchestrator produces *after* relaying a genuine `HUMAN_RESPONSE`
-  with `type: cost_approval` and a matching `id`. Structurally, the agent's
-  context does not contain "you may now call `approve-generation`" until that
-  relay has happened — this is enforced by the conversational turn boundary,
-  not by asking the model nicely to wait.
+- **The instruction to actually run `ai-film approve-generation` (or any
+  `generate-candidates`/`edit-candidate` call gated by it) is written as reachable
+  only after a genuine `HUMAN_RESPONSE` with `type: cost_approval` and a matching
+  `id` has been relayed back in — never in the same breath as the cost estimate
+  that precedes it.** The agent's whole prompt file is loaded as context from the
+  start, so the command text itself isn't literally absent beforehand — what's
+  enforced is that reaching it requires the branch condition ("only once you've
+  been resumed with a matching `HUMAN_RESPONSE`") to be satisfied, and that
+  condition can only become true after the orchestrator's real round trip with
+  the user. This is a stronger guarantee than a bare instruction to "ask first,"
+  but it is a documented, conditionally-gated instruction, not an engine-level
+  lock — see the next bullet for exactly what that does and doesn't guarantee.
 - **This is a structural guarantee, not a code-level one — see the Non-Goals
   tradeoff this implies.** Given this spec's Non-Goal of zero `ai_film` engine
   changes, there is no programmatic lock preventing a subagent with Bash access

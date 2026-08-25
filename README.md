@@ -73,7 +73,7 @@ ai-film status --path ~/my-film
 ai-film render --path ~/my-film
 ```
 
-Note: `generate-image`/`generate-video` (direct generation, shown above) don't currently check the approval recorded here — only the candidate-loop commands in §3 below (`generate-candidates`/`edit-candidate`) enforce it, and they're strict about the exact target string: `approve-generation --targets` must match the `--target` you'll pass to `generate-candidates` character-for-character (a bare shot id like `S01_SH01` does not authorize `shot:S01_SH01:image` — see §3).
+Note: `generate-image`/`generate-video` (direct generation, shown above) *do* check the approval recorded here, but against the bare shot id (`S01_SH01`) — the candidate-loop commands in §3 below (`generate-candidates`/`edit-candidate`) are stricter and check the full target string instead, so `approve-generation --targets` must match the `--target` you'll pass to `generate-candidates` character-for-character (a bare shot id like `S01_SH01` does not authorize `shot:S01_SH01:image` — see §3).
 
 `ai-film status --path ~/my-film` should report `S01_SH01  completed`, and
 `~/my-film/final/reel_001.mp4` should exist and be playable.

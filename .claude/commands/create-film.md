@@ -22,7 +22,7 @@ Whenever a dispatched subagent's report ends this way, you must:
 
 1. Parse the `id`, `type`, and `question`.
 2. Ask the user that exact question, for real, in this conversation (a plain message is fine; use your judgment on whether a multiple-choice-style tool fits better for a `selection`/`cost_approval`/`confirmation` question — the point is a genuine answer from the user, not a proxy for it).
-3. Once you have their real answer, **resume the SAME subagent dispatch you already have running** (the same instance/session, never a fresh dispatch — losing that instance loses everything it already worked out) with a message containing:
+3. Once you have their real answer, **resume the SAME subagent dispatch you already have running** (the same instance/session, never a fresh dispatch — losing that instance loses everything it already worked out) with a message containing: use whatever mechanism your platform gives you for continuing a specific, already-dispatched subagent (sending it another message so it resumes from its own transcript, not launching a new one). If your platform genuinely gives you no way to continue an existing subagent instance, stop and tell the user the pipeline can't safely proceed here — do not fall back to a fresh dispatch, since a fresh instance has none of the prior context and could re-derive a different (or contradictory) answer to the same question.
 
 ```
 HUMAN_RESPONSE:
