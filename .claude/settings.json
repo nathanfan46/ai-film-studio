@@ -2,8 +2,22 @@
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [
-      "Bash(ai-film *)",
-      "Bash(./.venv/bin/ai-film *)"
+      "Bash(ai-film init *)",
+      "Bash(ai-film version)",
+      "Bash(ai-film validate *)",
+      "Bash(ai-film status *)",
+      "Bash(ai-film models *)",
+      "Bash(ai-film check-continuity *)",
+      "Bash(ai-film review *)",
+      "Bash(ai-film select-candidate *)",
+      "Bash(./.venv/bin/ai-film init *)",
+      "Bash(./.venv/bin/ai-film version)",
+      "Bash(./.venv/bin/ai-film validate *)",
+      "Bash(./.venv/bin/ai-film status *)",
+      "Bash(./.venv/bin/ai-film models *)",
+      "Bash(./.venv/bin/ai-film check-continuity *)",
+      "Bash(./.venv/bin/ai-film review *)",
+      "Bash(./.venv/bin/ai-film select-candidate *)"
     ]
   }
 }
