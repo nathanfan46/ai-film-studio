@@ -9,10 +9,10 @@ Walks through provider/model selection for every generation capability and write
 
 ## Step 0: Preflight — resolve a working `ai-film` binary
 
-Do this before anything else. Do not require the user to manually activate a venv if you can avoid it:
+Do this before anything else. Do not require the user to manually activate a venv if you can avoid it. Run each check below as a single, plain command — never chain it with `; echo ...` or any other trailing command to inspect the exit code; your Bash tool already reports success/failure and any error output directly in its own result, so there's nothing to manually echo, and a chained command makes any permission prompt the user sees confusing (it may summarize the wrong half of the chain).
 
-1. Try `ai-film version`. If it succeeds (exit 0), set `AI_FILM_BIN` to the literal string `ai-film` and continue.
-2. If that fails — not found, or found but erroring (e.g. `ModuleNotFoundError: No module named 'ai_film'`, meaning something else on `PATH` shadowed the real one) — try `./.venv/bin/ai-film version`, relative to the current working directory (where `claude` was launched from — the `ai-film-studio` repo checkout itself, per the README). If that works, resolve it to an absolute path and set `AI_FILM_BIN` to that — do not ask the user to `source .venv/bin/activate` manually.
+1. Run `ai-film version` by itself. If it succeeds, set `AI_FILM_BIN` to the literal string `ai-film` and continue.
+2. If that fails — not found, or found but erroring (e.g. `ModuleNotFoundError: No module named 'ai_film'`, meaning something else on `PATH` shadowed the real one) — run `./.venv/bin/ai-film version` by itself, relative to the current working directory (where `claude` was launched from — the `ai-film-studio` repo checkout itself, per the README). If that works, resolve it to an absolute path (as its own separate command) and set `AI_FILM_BIN` to that — do not ask the user to `source .venv/bin/activate` manually.
 3. If neither works and `./pyproject.toml` exists (right repo, just not set up), ask the user whether to bootstrap it now (`python3 -m venv .venv` then `.venv/bin/pip install -e ".[dev]"`); if they agree, run it and retry step 2. If `./pyproject.toml` doesn't exist either, tell the user to run `claude` from inside the `ai-film-studio` repo checkout, and stop.
 
 Every `ai-film <command>` instruction below means `AI_FILM_BIN <command>` — substitute the resolved value.
