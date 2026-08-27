@@ -45,9 +45,17 @@ message: <the user's stated reason, only if approved is false>
 
 **Cost approval is never assumed on the agent's behalf.** For any `type: cost_approval` `NEEDS_INPUT`, you relay the real question and wait for the user's real answer before resuming — never resume with `approved: true` unless the user actually said so in this conversation.
 
-## Step 0: Preflight
+## Step 0: Preflight — resolve a working `ai-film` binary
 
-Confirm `ai-film` resolves on `PATH` (e.g. `which ai-film`, or `ai-film version`) before doing anything else — if it doesn't, tell the user to activate the project's venv (`.venv/bin` on `PATH`, per the README) and stop; every later step assumes this works. This command does not itself check `FAL_KEY` or provider configuration — if the user hasn't run `/ai-film-setup` yet, mention it's available, but don't block on it here (the mock provider works with zero configuration, so a fresh project is still usable without it).
+Do this before anything else; every later step (and every subagent you dispatch) needs a binary that actually works. Do not require the user to manually activate a venv if you can avoid it — resolve around it instead:
+
+1. Try `ai-film version`. If it prints a version cleanly (exit 0), you're done: set `AI_FILM_BIN` to the literal string `ai-film` and skip to Step 1.
+2. If that fails — command not found, *or* found but erroring (e.g. a stale/broken shim like `ModuleNotFoundError: No module named 'ai_film'`, which means something else on `PATH` shadowed the real one) — try `./.venv/bin/ai-film version`, relative to the current working directory (this is where `claude` was launched from, which per the README is meant to be the `ai-film-studio` repo checkout itself). If that succeeds, resolve it to an absolute path (e.g. via `pwd`) and set `AI_FILM_BIN` to that absolute path — do not ask the user to `source .venv/bin/activate`; just use the resolved path for every `ai-film` invocation for the rest of this run.
+3. If neither works, check whether `./pyproject.toml` exists (confirms you're in the right repo, just not set up yet). If it does, tell the user no working `ai-film` install was found and ask whether you should set one up now (`python3 -m venv .venv` then `.venv/bin/pip install -e ".[dev]"`, matching the README's install step). If they say yes, run it, then retry step 2 above. If `./pyproject.toml` doesn't exist either, this isn't the `ai-film-studio` repo checkout at all — tell the user to run `claude` from inside it instead, and stop; there's nothing to self-heal here.
+
+From here on, every instruction in this file and in the three dispatched agents' own instructions that says `ai-film <command>` means `AI_FILM_BIN <command>` — substitute the resolved value, not the literal word `ai-film`, unless step 1 resolved it to exactly that. When you dispatch the `ai-film-character` and `ai-film-storyboard` subagents in Steps 3-4 below, include the resolved `AI_FILM_BIN` value in their dispatch instructions — they each run `ai-film` commands independently and need to know what actually works, not just assume bare `ai-film` is on their PATH either.
+
+This command does not itself check `FAL_KEY` or provider configuration — if the user hasn't run `/ai-film-setup` yet, mention it's available, but don't block on it here (the mock provider works with zero configuration, so a fresh project is still usable without it).
 
 ## Parse arguments
 
@@ -57,7 +65,7 @@ Confirm `ai-film` resolves on `PATH` (e.g. `which ai-film`, or `ai-film version`
 
 Check whether `PROJECT_PATH/config.json` already exists.
 
-- If it doesn't: run `ai-film init "<Title>" --path PROJECT_PATH` and confirm it succeeded.
+- If it doesn't: run `AI_FILM_BIN init "<Title>" --path PROJECT_PATH` and confirm it succeeded.
 - If it does: this is a resume — don't re-run `init` (it's safe to re-run since `init_project` only writes `config.json` if absent and directory creation is idempotent, but skip it anyway and tell the user you're resuming the existing project instead, so it's clear nothing was reset).
 
 ## Step 2: Run the Director/Story agent
@@ -66,11 +74,11 @@ Dispatch the `ai-film-director` subagent with `PROJECT_PATH` as its project root
 
 ## Step 3: Run the Character agent, once per unique name
 
-For each name in the parsed `CHARACTERS` list, **one at a time, in order** (never in parallel — each run's protocol loop needs your real, in-order attention): dispatch the `ai-film-character` subagent with `PROJECT_PATH` and that one character name. Run the protocol loop above until it reports a genuine completion, then move to the next name.
+For each name in the parsed `CHARACTERS` list, **one at a time, in order** (never in parallel — each run's protocol loop needs your real, in-order attention): dispatch the `ai-film-character` subagent with `PROJECT_PATH`, that one character name, and the `AI_FILM_BIN` value resolved in Step 0. Run the protocol loop above until it reports a genuine completion, then move to the next name.
 
 ## Step 4: Run the Storyboard/Shot Director agent
 
-Once every character from Step 3 is locked (or Step 3 was skipped because there were no characters), dispatch the `ai-film-storyboard` subagent once, with `PROJECT_PATH` as its project root. It internally handles every scene and shot in one run — run the protocol loop above until it reports a genuine completion.
+Once every character from Step 3 is locked (or Step 3 was skipped because there were no characters), dispatch the `ai-film-storyboard` subagent once, with `PROJECT_PATH` as its project root and the `AI_FILM_BIN` value resolved in Step 0. It internally handles every scene and shot in one run — run the protocol loop above until it reports a genuine completion.
 
 ## Step 5: Wrap up
 
