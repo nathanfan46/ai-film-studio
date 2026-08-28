@@ -32,6 +32,11 @@ from ai_film.services.generation_service import (
     generate_video as generate_video_service,
     generate_voice as generate_voice_service,
 )
+from ai_film.audio_fix import apply_audio_offset as apply_audio_offset_service
+from ai_film.feedback_store import (
+    add_feedback_entry as add_feedback_entry_service,
+    resolve_feedback_entry as resolve_feedback_entry_service,
+)
 from ai_film.shot_store import load_shot, save_shot
 
 app = typer.Typer(name="ai-film", help="AI Film Studio production engine.")
@@ -276,6 +281,61 @@ def approve_generation_cmd(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
     typer.echo(f"approved {scope}: {len(target_ids)} target(s)")
+
+
+@app.command(name="add-feedback")
+def add_feedback_cmd(
+    shot: str = typer.Option(..., "--shot"),
+    target: str = typer.Option(..., "--target", help="video|voice|sfx|music|sync"),
+    note: str = typer.Option(..., "--note"),
+    at: float = typer.Option(None, "--at"),
+    range_start: float = typer.Option(None, "--range-start"),
+    range_end: float = typer.Option(None, "--range-end"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+) -> None:
+    """Record a piece of review feedback for a shot's video/voice/sfx/music/sync."""
+    try:
+        entry = add_feedback_entry_service(
+            project_dir=path, shot_id=shot, target=target, note=note,
+            at=at, range_start=range_start, range_end=range_end,
+        )
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"{shot}: added feedback {entry['id']}")
+
+
+@app.command(name="resolve-feedback")
+def resolve_feedback_cmd(
+    shot: str = typer.Option(..., "--shot"),
+    id: str = typer.Option(..., "--id"),
+    resolution: str = typer.Option(None, "--resolution"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+) -> None:
+    """Mark a feedback entry as resolved."""
+    try:
+        entry = resolve_feedback_entry_service(path, shot, id, resolution)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"{shot}: resolved {entry['id']}")
+
+
+@app.command(name="apply-audio-offset")
+def apply_audio_offset_cmd(
+    shot: str = typer.Option(..., "--shot"),
+    track: str = typer.Option(..., "--track", help="voice|sfx|music"),
+    offset_ms: float = typer.Option(..., "--offset-ms"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+) -> None:
+    """Nudge an audio track's start time via ffmpeg — no provider spend."""
+    shot_path = path / "03_shots" / f"{shot}.json"
+    try:
+        stage = apply_audio_offset_service(path, shot_path, track, offset_ms)
+    except (ValueError, RuntimeError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"{shot}: {track} now at version {stage['version']}")
 
 
 @app.command(name="render")
