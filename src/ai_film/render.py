@@ -12,6 +12,9 @@ def build_manifest(project_dir: Path) -> dict:
     shot_paths = sorted(shots_dir.glob("*.json"))
     shots = []
     for path in shot_paths:
+        # Skip feedback files and other non-shot files
+        if path.name.endswith(".feedback.json"):
+            continue
         shot = load_shot(path)
         video = shot["generation"]["video"]
         artifact = video.get("artifact")
