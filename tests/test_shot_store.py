@@ -77,3 +77,14 @@ def test_load_shot_round_trips(tmp_path: Path):
     loaded = load_shot(path)
     assert loaded["id"] == "S01_SH01"
     assert json.loads(path.read_text())["id"] == "S01_SH01"
+
+
+def test_list_shot_paths_excludes_feedback_files(tmp_path: Path):
+    from ai_film.shot_store import list_shot_paths
+    shots_dir = tmp_path / "03_shots"
+    shots_dir.mkdir()
+    (shots_dir / "S01_SH01.json").write_text("{}")
+    (shots_dir / "S01_SH01.feedback.json").write_text("{}")
+    (shots_dir / "S01_SH02.json").write_text("{}")
+    paths = list_shot_paths(shots_dir)
+    assert [p.name for p in paths] == ["S01_SH01.json", "S01_SH02.json"]

@@ -51,6 +51,13 @@ def test_build_manifest_orders_shots_and_includes_duration(tmp_path: Path):
     assert manifest["shots"][0]["duration"] == 2
 
 
+def test_build_manifest_ignores_feedback_files(tmp_path: Path):
+    save_shot(tmp_path / "03_shots" / "S01_SH01.json", _shot("S01_SH01", "05_video/S01_SH01.mp4"))
+    (tmp_path / "03_shots" / "S01_SH01.feedback.json").write_text('{"shot_id": "S01_SH01", "entries": []}')
+    manifest = build_manifest(tmp_path)
+    assert [s["id"] for s in manifest["shots"]] == ["S01_SH01"]
+
+
 def test_preflight_reports_missing_artifact(tmp_path: Path):
     save_shot(tmp_path / "03_shots" / "S01_SH01.json", _shot("S01_SH01", "05_video/missing.mp4"))
     manifest = build_manifest(tmp_path)
