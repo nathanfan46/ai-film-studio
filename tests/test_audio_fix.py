@@ -99,3 +99,13 @@ def test_apply_audio_offset_advances_track_with_negative_offset(tmp_path: Path):
     new_path = tmp_path / stage["artifact"]["path"]
     assert new_path.exists()
     assert new_path.stat().st_size > 0
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_apply_audio_offset_rejects_negative_offset_longer_than_track(tmp_path: Path):
+    voice_path = tmp_path / "06_audio" / "dialogue" / "S01_SH01.wav"
+    _make_tiny_wav(voice_path, duration=1.0)
+    shot_path = tmp_path / "03_shots" / "S01_SH01.json"
+    save_shot(shot_path, _shot_with_completed_voice("S01_SH01", "06_audio/dialogue/S01_SH01.wav"))
+    with pytest.raises(ValueError):
+        apply_audio_offset(tmp_path, shot_path, track="voice", offset_ms=-5000)

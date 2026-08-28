@@ -22,6 +22,13 @@ def apply_audio_offset(project_dir: Path, shot_path: Path, track: str, offset_ms
     if stage_data.get("status") != "completed" or not stage_data.get("artifact"):
         raise ValueError(f"shot {shot_id} has no completed {track!r} artifact to offset")
 
+    current_duration = stage_data["artifact"].get("duration_seconds")
+    if offset_ms < 0 and current_duration is not None and abs(offset_ms) / 1000 >= current_duration:
+        raise ValueError(
+            f"offset_ms={offset_ms} would trim past the track's duration "
+            f"({current_duration}s) — nothing would be left"
+        )
+
     archive = archive_stage_artifact(project_dir, stage_data, "audio_offset")
     if archive.archived_path is None:
         raise ValueError(
@@ -42,10 +49,11 @@ def apply_audio_offset(project_dir: Path, shot_path: Path, track: str, offset_ms
 
     try:
         subprocess.run(cmd, check=True, capture_output=True)
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as exc:
         if archive.restore:
             archive.restore()
-        raise
+        stderr = exc.stderr.decode(errors="replace") if exc.stderr else ""
+        raise RuntimeError(f"ffmpeg failed applying audio offset: {stderr}") from exc
 
     artifact = {
         "path": project_relative_path(str(new_path), project_dir),
