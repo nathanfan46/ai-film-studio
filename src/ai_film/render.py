@@ -4,17 +4,14 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from ai_film.shot_store import load_shot
+from ai_film.shot_store import list_shot_paths, load_shot
 
 
 def build_manifest(project_dir: Path) -> dict:
     shots_dir = project_dir / "03_shots"
-    shot_paths = sorted(shots_dir.glob("*.json"))
+    shot_paths = list_shot_paths(shots_dir)
     shots = []
     for path in shot_paths:
-        # Skip feedback files and other non-shot files
-        if path.name.endswith(".feedback.json"):
-            continue
         shot = load_shot(path)
         video = shot["generation"]["video"]
         artifact = video.get("artifact")

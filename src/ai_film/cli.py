@@ -38,7 +38,7 @@ from ai_film.feedback_store import (
     resolve_feedback_entry as resolve_feedback_entry_service,
 )
 from ai_film.media_review import build_media_review
-from ai_film.shot_store import load_shot, save_shot
+from ai_film.shot_store import list_shot_paths, load_shot, save_shot
 
 app = typer.Typer(name="ai-film", help="AI Film Studio production engine.")
 
@@ -77,7 +77,7 @@ def models_cmd(
 def status_cmd(path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path")) -> None:
     """Report every shot's aggregate status and a project-wide summary."""
     counts: dict[str, int] = {}
-    for shot_path in sorted((path / "03_shots").glob("*.json")):
+    for shot_path in list_shot_paths(path / "03_shots"):
         shot = load_shot(shot_path)
         counts[shot["status"]] = counts.get(shot["status"], 0) + 1
         typer.echo(f"{shot['id']}  {shot['status']}")
@@ -90,7 +90,7 @@ def status_cmd(path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path")) -> Non
 def validate_cmd(path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path")) -> None:
     """Validate every shot.json against the schema; exit 1 if any are invalid."""
     had_errors = False
-    for shot_path in sorted((path / "03_shots").glob("*.json")):
+    for shot_path in list_shot_paths(path / "03_shots"):
         errors = validate_shot(json.loads(shot_path.read_text()))
         if errors:
             had_errors = True
@@ -428,7 +428,7 @@ def generate_all_cmd(
         raise typer.Exit(code=1)
 
     _, gen_config = _stage_config(path, stage)
-    shot_ids = [p.stem for p in sorted((path / "03_shots").glob("*.json"))]
+    shot_ids = [p.stem for p in list_shot_paths(path / "03_shots")]
     calls = [_build_stage_call(path, shot_id, stage, force) for shot_id in shot_ids]
     results = run_bounded(calls, max_workers=gen_config["max_parallel_jobs"])
 

@@ -10,6 +10,11 @@ _ACTIVE = ("queued", "running")
 _DONE = ("completed", "not_required")
 
 
+def list_shot_paths(shots_dir: Path) -> list[Path]:
+    """List all shot.json files in a directory, excluding feedback.json files."""
+    return sorted(p for p in shots_dir.glob("*.json") if not p.name.endswith(".feedback.json"))
+
+
 def compute_status(shot: dict) -> str:
     continuity_status = shot.get("continuity", {}).get("status", "pending")
     generation = shot.get("generation", {})

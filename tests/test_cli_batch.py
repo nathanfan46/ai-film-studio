@@ -4,6 +4,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from ai_film.cli import app
+from ai_film.feedback_store import add_feedback_entry
 from ai_film.shot_store import load_shot, save_shot
 
 runner = CliRunner()
@@ -111,3 +112,20 @@ def test_generate_all_generates_every_shot_for_voice_stage(tmp_path: Path):
         assert shot["generation"]["voice"]["status"] == "completed"
         artifact_path = Path(shot["generation"]["voice"]["artifact"]["path"])
         assert (project_dir / artifact_path).exists()
+
+
+def test_generate_all_ignores_feedback_files_and_generates_all_shots(tmp_path: Path):
+    """Regression test: generate-all should skip feedback.json files."""
+    project_dir = _init_mock_project(tmp_path)
+    shot_ids = ["S01_SH01", "S01_SH02", "S01_SH03"]
+    # Add feedback to one shot to create a feedback.json sibling
+    add_feedback_entry(project_dir, "S01_SH01", target="sync", note="test feedback")
+    runner.invoke(
+        app,
+        ["approve-generation", "--scope", "storyboard", "--targets", ",".join(shot_ids), "--path", str(project_dir)],
+    )
+    result = runner.invoke(app, ["generate-all", "--stage", "image", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    for shot_id in shot_ids:
+        shot = load_shot(project_dir / "03_shots" / f"{shot_id}.json")
+        assert shot["generation"]["image"]["status"] == "completed"
