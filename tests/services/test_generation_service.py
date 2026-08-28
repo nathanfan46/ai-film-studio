@@ -164,3 +164,83 @@ def test_generate_image_marks_stage_failed_after_exhausted_retries(tmp_path: Pat
     shot = load_shot(shot_path)
     assert shot["generation"]["image"]["status"] == "failed"
     assert shot["status"] == "failed"
+
+
+def test_generate_video_first_completion_has_version_one_and_no_history(tmp_path: Path):
+    from ai_film.providers.mock.video import MockVideoProvider
+    from ai_film.services.generation_service import generate_video
+
+    project_dir = _project(tmp_path)
+    shot_path = _shot_path(project_dir)
+    approve_generation(project_dir, "storyboard", ["S01_SH01"], estimated_cost=0.1)
+
+    stage = generate_video(
+        project_dir=project_dir, shot_path=shot_path, provider=MockVideoProvider(),
+        prompt="a corridor", model="veo-3", reference_paths=[], duration_seconds=5.0,
+        output_path=project_dir / "05_video" / "S01_SH01.mp4", provider_name="mock",
+    )
+    assert stage["version"] == 1
+    assert stage["history"] == []
+
+
+def test_generate_video_force_regenerate_archives_old_artifact_and_bumps_version(tmp_path: Path):
+    from ai_film.providers.mock.video import MockVideoProvider
+    from ai_film.services.generation_service import generate_video
+
+    project_dir = _project(tmp_path)
+    shot_path = _shot_path(project_dir)
+    approve_generation(project_dir, "storyboard", ["S01_SH01"], estimated_cost=0.1)
+
+    kwargs = dict(
+        project_dir=project_dir, shot_path=shot_path, prompt="a corridor",
+        model="veo-3", reference_paths=[], duration_seconds=5.0,
+        output_path=project_dir / "05_video" / "S01_SH01.mp4", provider_name="mock",
+    )
+    first = generate_video(provider=MockVideoProvider(), **kwargs)
+    first_path = project_dir / first["artifact"]["path"]
+    first_path.write_bytes(b"FIRST-VERSION-BYTES")  # distinguish from the mock's fixed bytes
+
+    second = generate_video(provider=MockVideoProvider(), force=True, **kwargs)
+
+    assert second["version"] == 2
+    assert len(second["history"]) == 1
+    archived = second["history"][0]
+    assert archived["version"] == 1
+    assert archived["superseded_reason"] == "regenerate"
+    archived_path = project_dir / archived["artifact"]["path"]
+    assert archived_path.exists()
+    assert archived_path.read_bytes() == b"FIRST-VERSION-BYTES"
+    new_path = project_dir / second["artifact"]["path"]
+    assert new_path.read_bytes() != b"FIRST-VERSION-BYTES"
+
+
+def test_generate_video_failed_regeneration_restores_prior_artifact(tmp_path: Path):
+    from ai_film.errors import ProviderError
+    from ai_film.providers.mock.video import MockVideoProvider
+    from ai_film.services.generation_service import generate_video
+
+    project_dir = _project(tmp_path)
+    shot_path = _shot_path(project_dir)
+    approve_generation(project_dir, "storyboard", ["S01_SH01"], estimated_cost=0.1)
+
+    kwargs = dict(
+        project_dir=project_dir, shot_path=shot_path, prompt="a corridor",
+        model="veo-3", reference_paths=[], duration_seconds=5.0,
+        output_path=project_dir / "05_video" / "S01_SH01.mp4", provider_name="mock",
+    )
+    first = generate_video(provider=MockVideoProvider(), **kwargs)
+    original_path = project_dir / first["artifact"]["path"]
+    original_bytes = original_path.read_bytes()
+
+    with pytest.raises(ProviderError):
+        generate_video(
+            provider=MockVideoProvider(fail_first_n_submits=10), force=True,
+            max_attempts=1, **kwargs,
+        )
+
+    # a failed regeneration attempt must not leave the shot's working
+    # artifact archived away or missing
+    assert original_path.exists()
+    assert original_path.read_bytes() == original_bytes
+    shot = load_shot(shot_path)
+    assert shot["generation"]["video"]["status"] == "failed"

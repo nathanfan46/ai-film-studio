@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, TypeVar
 
@@ -27,6 +29,69 @@ _SCOPE_BY_STAGE = {
     "sfx": "storyboard",
     "music": "storyboard",
 }
+
+
+@dataclass
+class ArchiveResult:
+    version: int
+    history: list[dict]
+    archived_path: Path | None
+    restore: Callable[[], None] | None
+
+
+def archive_stage_artifact(
+    project_dir: Path, stage_data: dict, superseded_reason: str,
+) -> ArchiveResult:
+    """Move stage_data's current artifact file (if any) into a sibling
+    history/ directory next to it, returning the next version number, the
+    updated history list, the path the file was archived to (audio_fix.py
+    uses this as its ffmpeg input), and a zero-arg restore callable that
+    undoes the move — used when the regeneration attempt that prompted the
+    archive ends up failing, so a failed attempt never leaves the shot's
+    prior working artifact missing.
+    """
+    history = list(stage_data.get("history", []))
+    if stage_data.get("status") != "completed" or not stage_data.get("artifact"):
+        return ArchiveResult(version=1, history=history, archived_path=None, restore=None)
+
+    old_version = stage_data.get("version", 1)
+    old_artifact = stage_data["artifact"]
+    old_path = project_dir / old_artifact["path"]
+
+    if not old_path.exists():
+        history.append({
+            "version": old_version,
+            "provider": stage_data.get("provider"),
+            "model": stage_data.get("model"),
+            "artifact": old_artifact,
+            "superseded_at": datetime.now(timezone.utc).isoformat(),
+            "superseded_reason": superseded_reason,
+        })
+        return ArchiveResult(version=old_version + 1, history=history, archived_path=None, restore=None)
+
+    history_dir = old_path.parent / "history"
+    history_dir.mkdir(parents=True, exist_ok=True)
+    archived_path = history_dir / f"{old_path.stem}_v{old_version}{old_path.suffix}"
+    old_path.replace(archived_path)
+    archived_artifact = {
+        **old_artifact, "path": project_relative_path(str(archived_path), project_dir),
+    }
+    history.append({
+        "version": old_version,
+        "provider": stage_data.get("provider"),
+        "model": stage_data.get("model"),
+        "artifact": archived_artifact,
+        "superseded_at": datetime.now(timezone.utc).isoformat(),
+        "superseded_reason": superseded_reason,
+    })
+
+    def restore() -> None:
+        if archived_path.exists():
+            archived_path.replace(old_path)
+
+    return ArchiveResult(
+        version=old_version + 1, history=history, archived_path=archived_path, restore=restore,
+    )
 
 
 def run_generation_stage(
@@ -57,6 +122,8 @@ def run_generation_stage(
     if stage_data.get("status") == "completed" and not force:
         return stage_data
 
+    archive = archive_stage_artifact(project_dir, stage_data, "regenerate")
+
     def on_attempt(attempt: int, job: GenerationJob | None, outcome: str) -> None:
         write_attempt_log(
             project_dir,
@@ -79,6 +146,8 @@ def run_generation_stage(
             on_attempt=on_attempt,
         )
     except ProviderError:
+        if archive.restore:
+            archive.restore()
         shot["generation"][stage] = {
             **stage_data,
             "provider": provider_name,
@@ -96,6 +165,8 @@ def run_generation_stage(
         "provider": provider_name,
         "model": model_name,
         "status": "completed",
+        "version": archive.version,
+        "history": archive.history,
         "job": {"provider": job_result.job.provider, "id": job_result.job.id},
         "inputs": stage_data.get("inputs", []),
         "artifact": artifact,
