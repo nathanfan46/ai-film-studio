@@ -51,6 +51,7 @@ def apply_audio_offset(project_dir: Path, shot_path: Path, track: str, offset_ms
         "path": project_relative_path(str(new_path), project_dir),
         "size_bytes": new_path.stat().st_size,
         "sha256": None,
+        # NOTE: duration_seconds is pre-offset; adelay/trim changes actual file duration slightly, but not recomputed here (no current consumers)
         "duration_seconds": stage_data["artifact"].get("duration_seconds"),
     }
     shot["generation"][track] = {
