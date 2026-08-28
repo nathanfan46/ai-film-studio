@@ -109,7 +109,11 @@ def test_full_media_review_loop(tmp_path: Path, monkeypatch):
     assert result.exit_code == 0
     final_html = review_html.read_text()
     assert "voice starts ~400ms early" in final_html
-    assert "v2" in final_html
+    # explicitly the voice track's label (the video panel also renders its own
+    # version badge, so a bare "v2" check would be ambiguous about which
+    # track it's asserting on) — the golden path doesn't regenerate video,
+    # so the video panel correctly shows no history disclosure here.
+    assert "Voice · v2" in final_html
     assert "1 earlier version" in final_html
 
     # none of the core engine's existing behavior is affected: render still

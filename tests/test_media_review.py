@@ -95,3 +95,45 @@ def test_build_media_review_shows_per_track_version_and_history(tmp_path: Path):
     assert "Voice · v2" in content
     assert "1 earlier version" in content
     assert "../06_audio/dialogue/history/S01_SH01_v1.wav" in content
+
+
+def test_build_media_review_shows_video_version_and_history(tmp_path: Path):
+    shot = _shot("S01_SH01", video_completed=True)
+    shot["generation"]["video"]["version"] = 3
+    shot["generation"]["video"]["history"] = [
+        {
+            "version": 1, "provider": "fal", "model": "veo-3",
+            "artifact": {
+                "path": "05_video/history/S01_SH01_v1.mp4",
+                "size_bytes": 10, "sha256": None, "duration_seconds": 6.0,
+            },
+            "superseded_at": "2026-08-27T09:00:00Z", "superseded_reason": "regenerate",
+        },
+        {
+            "version": 2, "provider": "fal", "model": "veo-3",
+            "artifact": {
+                "path": "05_video/history/S01_SH01_v2.mp4",
+                "size_bytes": 11, "sha256": None, "duration_seconds": 6.0,
+            },
+            "superseded_at": "2026-08-27T10:00:00Z", "superseded_reason": "regenerate",
+        },
+    ]
+    save_shot(tmp_path / "03_shots" / "S01_SH01.json", shot)
+    html_path = build_media_review(tmp_path, "S01_SH01")
+    content = html_path.read_text()
+    assert "v3" in content
+    assert "2 earlier version(s)" in content
+    assert "../05_video/history/S01_SH01_v1.mp4" in content
+    assert "../05_video/history/S01_SH01_v2.mp4" in content
+
+
+def test_build_media_review_positions_flags_against_the_real_artifact_duration(tmp_path: Path):
+    shot = _shot("S01_SH01", video_completed=True)
+    shot["duration_seconds"] = 6  # planned duration
+    shot["generation"]["video"]["artifact"]["duration_seconds"] = 10.0  # actual artifact duration differs
+    save_shot(tmp_path / "03_shots" / "S01_SH01.json", shot)
+    add_feedback_entry(tmp_path, "S01_SH01", target="video", note="issue", at=5.0)
+    html_path = build_media_review(tmp_path, "S01_SH01")
+    content = html_path.read_text()
+    # at the real 10s duration, 5.0s is 50% — at the planned 6s duration it would be ~83%
+    assert 'style="left:50.00%"' in content

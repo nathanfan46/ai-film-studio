@@ -113,6 +113,23 @@ def _flag_html(entry: dict, duration: float) -> str:
     )
 
 
+def _version_history_html(stage_data: dict, tag: str) -> tuple[str, str]:
+    version = stage_data.get("version", 1)
+    history = stage_data.get("history", [])
+    history_html = ""
+    if history:
+        rows = "".join(
+            f'<div class="history-row">v{h["version"]} '
+            f'<{tag} controls src="{_rel(h["artifact"]["path"])}"></{tag}>'
+            f'</div>'
+            for h in history
+        )
+        history_html = (
+            f'<details><summary>{len(history)} earlier version(s)</summary>{rows}</details>'
+        )
+    return f'v{version}', history_html
+
+
 def _track_row_html(shot: dict, stage: str, label: str, waveforms: dict) -> str:
     stage_data = shot["generation"].get(stage, {})
     if stage_data.get("status") != "completed" or not stage_data.get("artifact"):
@@ -121,23 +138,12 @@ def _track_row_html(shot: dict, stage: str, label: str, waveforms: dict) -> str:
             f'<span class="placeholder">not generated for this shot</span></div>'
         )
     artifact = stage_data["artifact"]
-    version = stage_data.get("version", 1)
-    history = stage_data.get("history", [])
-    history_html = ""
-    if history:
-        rows = "".join(
-            f'<div class="history-row">v{h["version"]} '
-            f'<audio controls src="{_rel(h["artifact"]["path"])}"></audio></div>'
-            for h in history
-        )
-        history_html = (
-            f'<details><summary>{len(history)} earlier version(s)</summary>{rows}</details>'
-        )
+    version_label, history_html = _version_history_html(stage_data, "audio")
     waveform_html = ""
     if stage in waveforms:
         waveform_html = f'<img class="waveform" src="{waveforms[stage]}" alt="">'
     return (
-        f'<div class="track"><span class="name">{label} · v{version}</span>'
+        f'<div class="track"><span class="name">{label} · {version_label}</span>'
         f'<audio controls src="{_rel(artifact["path"])}"></audio>'
         f'{waveform_html}{history_html}</div>'
     )
@@ -145,14 +151,24 @@ def _track_row_html(shot: dict, stage: str, label: str, waveforms: dict) -> str:
 
 def _render_html(shot: dict, feedback: dict, waveforms: dict) -> str:
     shot_id = shot["id"]
-    duration = float(shot.get("duration_seconds") or 0)
     action = html.escape(shot.get("action") or "")
     status = html.escape(shot.get("status") or "")
     video_stage = shot["generation"].get("video", {})
     has_video = video_stage.get("status") == "completed" and video_stage.get("artifact")
+    # Prefer the actual artifact's duration (what the <video> element and JS
+    # playhead use) over the planned shot duration — they can differ, and
+    # flags/ticks must be positioned against the real playable duration.
+    duration = float(
+        (video_stage.get("artifact", {}).get("duration_seconds") if has_video else None)
+        or shot.get("duration_seconds")
+        or 0
+    )
     if has_video:
+        video_version_label, video_history_html = _version_history_html(video_stage, "video")
         video_html = (
             f'<video controls id="player" src="{_rel(video_stage["artifact"]["path"])}"></video>'
+            f'<div class="track"><span class="name">Video · {video_version_label}</span>'
+            f'{video_history_html}</div>'
         )
     else:
         video_html = '<div class="placeholder">video not generated for this shot</div>'
