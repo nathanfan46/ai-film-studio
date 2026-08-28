@@ -104,3 +104,18 @@ def test_apply_audio_offset_rejects_stage_without_artifact(tmp_path: Path):
         ],
     )
     assert result.exit_code == 1
+
+
+def test_review_media_builds_and_opens_page(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", _shot("S01_SH01"))
+    monkeypatch.setattr("ai_film.cli.open_in_browser", lambda path: None)
+    result = runner.invoke(app, ["review-media", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert (project_dir / "07_review" / "S01_SH01.html").exists()
+
+
+def test_review_media_rejects_unknown_shot(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    result = runner.invoke(app, ["review-media", "--shot", "NOPE", "--path", str(project_dir)])
+    assert result.exit_code == 1

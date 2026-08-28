@@ -37,6 +37,7 @@ from ai_film.feedback_store import (
     add_feedback_entry as add_feedback_entry_service,
     resolve_feedback_entry as resolve_feedback_entry_service,
 )
+from ai_film.media_review import build_media_review
 from ai_film.shot_store import load_shot, save_shot
 
 app = typer.Typer(name="ai-film", help="AI Film Studio production engine.")
@@ -336,6 +337,21 @@ def apply_audio_offset_cmd(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
     typer.echo(f"{shot}: {track} now at version {stage['version']}")
+
+
+@app.command(name="review-media")
+def review_media_cmd(
+    shot: str = typer.Option(..., "--shot"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+) -> None:
+    """Build (or rebuild) the video/audio review page for a shot and open it."""
+    try:
+        html_path = build_media_review(path, shot)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    open_in_browser(html_path)
+    typer.echo(f"opened {html_path}")
 
 
 @app.command(name="render")
