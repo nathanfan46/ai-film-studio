@@ -120,6 +120,15 @@ def select_candidate(project_dir: Path, target: str, candidate_id: str) -> dict:
         dest_path = project_dir / "04_storyboard" / f"{shot_id}.png"
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(source_path, dest_path)
+        # NOTE: this intentionally does not go through archive_stage_artifact
+        # (see src/ai_film/services/generation_service.py) — select_candidate
+        # predates the media-review-layer's version/history bookkeeping, and
+        # candidate selection already preserves prior state via the numbered
+        # candidates/ directory, a different mechanism than history/. If a
+        # shot's image was previously force-regenerated via generate-image
+        # (bumping version/history), a subsequent select-candidate call here
+        # will overwrite that artifact without archiving it — known, low-risk
+        # since media_review.py deliberately doesn't render the image stage.
         shot["generation"]["image"] = {
             **shot["generation"].get("image", {}),
             "status": "completed",
