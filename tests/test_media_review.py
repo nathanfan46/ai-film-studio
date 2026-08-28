@@ -67,3 +67,31 @@ def test_build_media_review_writes_to_07_review_directory(tmp_path: Path):
     save_shot(tmp_path / "03_shots" / "S01_SH01.json", _shot("S01_SH01"))
     html_path = build_media_review(tmp_path, "S01_SH01")
     assert html_path == tmp_path / "07_review" / "S01_SH01.html"
+
+
+def test_build_media_review_shows_per_track_version_and_history(tmp_path: Path):
+    shot = _shot("S01_SH01", video_completed=True)
+    shot["generation"]["voice"] = {
+        "status": "completed", "provider": "fal", "model": "csm-1b", "attempts": 1,
+        "version": 2,
+        "history": [
+            {
+                "version": 1, "provider": "fal", "model": "csm-1b",
+                "artifact": {
+                    "path": "06_audio/dialogue/history/S01_SH01_v1.wav",
+                    "size_bytes": 10, "sha256": None, "duration_seconds": 1.0,
+                },
+                "superseded_at": "2026-08-27T09:00:00Z", "superseded_reason": "audio_offset",
+            }
+        ],
+        "artifact": {
+            "path": "06_audio/dialogue/S01_SH01.wav", "size_bytes": 12, "sha256": None,
+            "duration_seconds": 1.0,
+        },
+    }
+    save_shot(tmp_path / "03_shots" / "S01_SH01.json", shot)
+    html_path = build_media_review(tmp_path, "S01_SH01")
+    content = html_path.read_text()
+    assert "Voice · v2" in content
+    assert "1 earlier version" in content
+    assert "../06_audio/dialogue/history/S01_SH01_v1.wav" in content
