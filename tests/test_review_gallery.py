@@ -45,6 +45,16 @@ def test_build_gallery_writes_html_listing_every_candidate_with_id_and_parent(tm
     assert 'src="002.png"' in content
 
 
+def test_build_gallery_uses_a_responsive_grid_with_large_images(tmp_path: Path):
+    _seed_candidates(tmp_path)
+
+    html_path = build_gallery(tmp_path, "character:girl")
+
+    content = html_path.read_text()
+    assert "grid-template-columns" in content
+    assert "max-width:300px" not in content
+
+
 def test_build_gallery_marks_the_selected_candidate(tmp_path: Path):
     _seed_candidates(tmp_path)
     from ai_film.candidate_store import load_candidate_set, save_candidate_set

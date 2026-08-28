@@ -31,17 +31,18 @@ def _render_html(target: str, candidate_set: dict) -> str:
         if selected == candidate["id"]:
             caption += " ★ SELECTED"
         figures.append(
-            f'<figure style="margin:8px">'
-            f'<img src="{filename}" style="max-width:300px;display:block">'
-            f'<figcaption>{caption}</figcaption>'
+            f'<figure style="margin:0">'
+            f'<img src="{filename}" style="width:100%;display:block;border-radius:4px">'
+            f'<figcaption style="margin-top:6px">{caption}</figcaption>'
             f'</figure>'
         )
     body = "".join(figures)
     return (
         "<!doctype html><html><head><meta charset=\"utf-8\">"
         f"<title>Candidates: {target}</title></head>"
-        f"<body><h1>{target}</h1>"
-        f'<div style="display:flex;flex-wrap:wrap;gap:16px">{body}</div>'
+        f'<body style="font-family:sans-serif;margin:24px">'
+        f"<h1>{target}</h1>"
+        f'<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(360px, 1fr));gap:24px">{body}</div>'
         "</body></html>"
     )
 
