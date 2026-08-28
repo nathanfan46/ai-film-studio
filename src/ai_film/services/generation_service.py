@@ -39,6 +39,17 @@ class ArchiveResult:
     restore: Callable[[], None] | None
 
 
+def _history_entry(stage_data: dict, version: int, artifact: dict, superseded_reason: str) -> dict:
+    return {
+        "version": version,
+        "provider": stage_data.get("provider"),
+        "model": stage_data.get("model"),
+        "artifact": artifact,
+        "superseded_at": datetime.now(timezone.utc).isoformat(),
+        "superseded_reason": superseded_reason,
+    }
+
+
 def archive_stage_artifact(
     project_dir: Path, stage_data: dict, superseded_reason: str,
 ) -> ArchiveResult:
@@ -49,24 +60,27 @@ def archive_stage_artifact(
     undoes the move — used when the regeneration attempt that prompted the
     archive ends up failing, so a failed attempt never leaves the shot's
     prior working artifact missing.
+
+    Whether to archive is decided by whether an `artifact` record exists,
+    not by `status` — a failed regeneration attempt leaves `status` as
+    "failed" while still preserving the previously-completed `version`,
+    `history`, and `artifact` (see run_generation_stage's failure branch).
+    Gating on `status == "completed"` here would silently drop the version
+    counter back to 1 and let a still-valid artifact file be overwritten
+    without ever being archived.
     """
     history = list(stage_data.get("history", []))
-    if stage_data.get("status") != "completed" or not stage_data.get("artifact"):
-        return ArchiveResult(version=1, history=history, archived_path=None, restore=None)
+    next_version = stage_data.get("version", 0) + 1 if stage_data.get("version") else 1
+
+    if not stage_data.get("artifact"):
+        return ArchiveResult(version=next_version, history=history, archived_path=None, restore=None)
 
     old_version = stage_data.get("version", 1)
     old_artifact = stage_data["artifact"]
     old_path = project_dir / old_artifact["path"]
 
     if not old_path.exists():
-        history.append({
-            "version": old_version,
-            "provider": stage_data.get("provider"),
-            "model": stage_data.get("model"),
-            "artifact": old_artifact,
-            "superseded_at": datetime.now(timezone.utc).isoformat(),
-            "superseded_reason": superseded_reason,
-        })
+        history.append(_history_entry(stage_data, old_version, old_artifact, superseded_reason))
         return ArchiveResult(version=old_version + 1, history=history, archived_path=None, restore=None)
 
     history_dir = old_path.parent / "history"
@@ -76,14 +90,7 @@ def archive_stage_artifact(
     archived_artifact = {
         **old_artifact, "path": project_relative_path(str(archived_path), project_dir),
     }
-    history.append({
-        "version": old_version,
-        "provider": stage_data.get("provider"),
-        "model": stage_data.get("model"),
-        "artifact": archived_artifact,
-        "superseded_at": datetime.now(timezone.utc).isoformat(),
-        "superseded_reason": superseded_reason,
-    })
+    history.append(_history_entry(stage_data, old_version, archived_artifact, superseded_reason))
 
     def restore() -> None:
         if archived_path.exists():

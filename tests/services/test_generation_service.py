@@ -244,3 +244,39 @@ def test_generate_video_failed_regeneration_restores_prior_artifact(tmp_path: Pa
     assert original_path.read_bytes() == original_bytes
     shot = load_shot(shot_path)
     assert shot["generation"]["video"]["status"] == "failed"
+
+
+def test_generate_video_preserves_version_across_a_failed_then_successful_regeneration(tmp_path: Path):
+    from ai_film.providers.mock.video import MockVideoProvider
+    from ai_film.services.generation_service import generate_video
+    from ai_film.errors import ProviderError
+
+    project_dir = _project(tmp_path)
+    shot_path = _shot_path(project_dir)
+    approve_generation(project_dir, "storyboard", ["S01_SH01"], estimated_cost=0.1)
+
+    kwargs = dict(
+        project_dir=project_dir, shot_path=shot_path, prompt="a corridor",
+        model="veo-3", reference_paths=[], duration_seconds=5.0,
+        output_path=project_dir / "05_video" / "S01_SH01.mp4", provider_name="mock",
+    )
+    generate_video(provider=MockVideoProvider(), **kwargs)
+    second = generate_video(provider=MockVideoProvider(), force=True, **kwargs)
+    assert second["version"] == 2
+    second_path = project_dir / second["artifact"]["path"]
+    second_path.write_bytes(b"GOOD-V2-BYTES")
+
+    with pytest.raises(ProviderError):
+        generate_video(
+            provider=MockVideoProvider(fail_first_n_submits=10), force=True,
+            max_attempts=1, **kwargs,
+        )
+
+    third = generate_video(provider=MockVideoProvider(), force=True, **kwargs)
+
+    assert third["version"] == 3, "version must not reset to 1 after a failed-then-retried regeneration"
+    versions_in_history = [h["version"] for h in third["history"]]
+    assert versions_in_history == [1, 2], "v2 must be archived, not silently overwritten"
+    v2_history_entry = next(h for h in third["history"] if h["version"] == 2)
+    v2_archived_path = project_dir / v2_history_entry["artifact"]["path"]
+    assert v2_archived_path.read_bytes() == b"GOOD-V2-BYTES", "the v2 artifact must survive, not be destroyed"
