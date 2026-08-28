@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import webbrowser
 from pathlib import Path
 
@@ -48,4 +49,9 @@ def _render_html(target: str, candidate_set: dict) -> str:
 
 
 def open_in_browser(html_path: Path) -> None:
-    webbrowser.open(f"file://{html_path.resolve()}")
+    # A cache-busting query string forces browsers to treat this as a distinct
+    # URL from the last time this same file was opened, so a tab a user already
+    # has open on this path reloads with fresh content instead of just
+    # regaining focus on stale content — file:// pages have no other way to
+    # signal "the content on disk changed" to an already-open tab.
+    webbrowser.open(f"file://{html_path.resolve()}?t={time.time_ns()}")

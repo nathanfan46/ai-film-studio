@@ -79,3 +79,21 @@ def test_open_in_browser_calls_webbrowser_open_with_file_uri(mock_webbrowser, tm
     call_arg = mock_webbrowser.open.call_args[0][0]
     assert call_arg.startswith("file://")
     assert str(html_path.resolve()) in call_arg
+
+
+@patch("ai_film.review_gallery.webbrowser")
+def test_open_in_browser_uses_a_cache_busting_query_string(mock_webbrowser, tmp_path: Path):
+    html_path = tmp_path / "review.html"
+    html_path.write_text("<html></html>")
+
+    open_in_browser(html_path)
+    first_call = mock_webbrowser.open.call_args[0][0]
+    open_in_browser(html_path)
+    second_call = mock_webbrowser.open.call_args[0][0]
+
+    assert "?t=" in first_call
+    assert "?t=" in second_call
+    assert first_call != second_call, (
+        "two opens of the same file should produce different URLs so an already-open "
+        "browser tab reloads instead of just regaining focus on stale content"
+    )
