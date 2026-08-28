@@ -13,6 +13,8 @@ GENERATION_STAGE_SCHEMA = {
         },
         "provider": {"type": ["string", "null"]},
         "model": {"type": ["string", "null"]},
+        "version": {"type": "integer"},
+        "history": {"type": "array"},
         "job": {"type": ["object", "null"]},
         "inputs": {"type": "array"},
         "artifact": {"type": ["object", "null"]},

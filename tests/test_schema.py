@@ -48,3 +48,35 @@ def test_missing_generation_stage_is_reported():
     del shot["generation"]["music"]
     errors = validate_shot(shot)
     assert any("music" in e for e in errors)
+
+
+def test_generation_stage_rejects_non_integer_version():
+    shot = _valid_shot()
+    shot["generation"]["video"]["version"] = "two"
+    errors = validate_shot(shot)
+    assert len(errors) == 1
+
+
+def test_generation_stage_accepts_version_and_history():
+    shot = _valid_shot()
+    shot["generation"]["video"] = {
+        "status": "completed",
+        "attempts": 1,
+        "version": 2,
+        "history": [
+            {
+                "version": 1,
+                "provider": "fal",
+                "model": "veo-3",
+                "artifact": {
+                    "path": "05_video/history/S01_SH01_v1.mp4",
+                    "size_bytes": 100,
+                    "sha256": None,
+                    "duration_seconds": 5.0,
+                },
+                "superseded_at": "2026-08-27T09:00:00Z",
+                "superseded_reason": "regenerate",
+            }
+        ],
+    }
+    assert validate_shot(shot) == []
