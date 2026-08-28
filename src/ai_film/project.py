@@ -9,6 +9,7 @@ PROJECT_DIRS = (
     "00_story", "01_bibles", "02_scenes", "03_shots",
     "04_storyboard", "05_video",
     "06_audio/dialogue", "06_audio/sfx", "06_audio/music",
+    "07_review",
     "final", "99_logs",
 )
 

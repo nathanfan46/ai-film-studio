@@ -33,3 +33,7 @@ def test_init_project_does_not_overwrite_existing_config(tmp_path: Path):
 
     reloaded = json.loads(config_path.read_text())
     assert reloaded["generation"]["max_attempts"] == 7
+
+
+def test_project_dirs_includes_review_directory():
+    assert "07_review" in PROJECT_DIRS
