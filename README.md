@@ -140,8 +140,7 @@ an image came from the candidate loop or a direct `generate-image` call.
 
 Environments use the same pattern with `--target env:<name>`.
 
-Video/audio candidates, an interactive (clickable) review UI, and a whole-film
-preview aren't built yet — see Roadmap below.
+Video/audio candidates and a whole-film preview aren't built yet — see Roadmap below.
 
 ## 4. Switch to real generation
 
@@ -165,7 +164,25 @@ Run `ai-film --help` or `ai-film <command> --help` for the full list and flags. 
 command set: `init`, `models`, `status`, `validate`, `generate-image`, `generate-video`,
 `generate-voice`, `generate-sfx`, `generate-music`, `generate-all`, `check-continuity`,
 `approve-generation`, `render`, `generate-candidates`, `review`, `select-candidate`,
-`edit-candidate`.
+`edit-candidate`, `add-feedback`, `resolve-feedback`, `apply-audio-offset`, `review-media`.
+
+The last four are the media review layer, for reviewing generated video/audio and
+fixing cheap timing issues without a provider call:
+
+```bash
+# Record a piece of review feedback for a shot's video/voice/sfx/music/sync,
+# with an optional point-in-time (--at) or range (--range-start/--range-end)
+ai-film add-feedback --shot S01_SH01 --target video --note "too dark" --at 3.3 --path ~/my-film
+
+# Mark a feedback entry as resolved, with an optional note on how it was addressed
+ai-film resolve-feedback --shot S01_SH01 --id fb001 --resolution "regenerated" --path ~/my-film
+
+# Nudge an audio track's (voice/sfx/music) start time via ffmpeg — no provider spend
+ai-film apply-audio-offset --shot S01_SH01 --track voice --offset-ms 400 --path ~/my-film
+
+# Build (or rebuild) the video/audio review page for a shot and open it in your browser
+ai-film review-media --shot S01_SH01 --path ~/my-film
+```
 
 ## Project layout
 
@@ -182,9 +199,17 @@ assets/                     # reference images (characters, environments, props,
   candidates/<shot_id>/candidates/  # candidate images for that shot's storyboard, pre-selection — note the doubled "candidates/" (target_dir already includes one level; candidate generation adds its own subdirectory on top)
 05_video/                     # generated video clips
 06_audio/{dialogue,sfx,music}/
+07_review/                    # static per-shot review pages (<shot_id>.html) built by `review-media`, plus generated waveform PNGs
 final/                        # rendered reel_001.mp4 lands here
 99_logs/                      # per-shot generation attempt logs + approval records
 ```
+
+Once a shot's image/video/voice/sfx/music artifact has been regenerated (`--force`)
+or timing-fixed (`apply-audio-offset`) at least once, a `history/` subdirectory
+appears next to that stage's output directory (e.g. `05_video/history/`,
+`06_audio/dialogue/history/`), holding the superseded version(s) — old artifact
+files are moved there, never deleted, and `shot.json`'s `generation.<stage>.history`
+records each one.
 
 ## Known limitations (v1)
 
@@ -199,8 +224,8 @@ final/                        # rendered reel_001.mp4 lands here
   of the paid job it just submitted; a re-run will resubmit and pay again.
 - **No backoff or timeout on provider polling** — a stuck job can hang a `generate-*`
   or `generate-candidates`/`edit-candidate` command indefinitely.
-- **Candidates are image-only.** Video/audio candidate review, a whole-film preview,
-  and interactive (clickable) browser review aren't built yet — see Roadmap below.
+- **Candidates are image-only.** Video/audio candidate review and a whole-film preview
+  aren't built yet — see Roadmap below.
 
 These are documented gaps from this project's own final reviews, not surprises you'll
 discover — see `docs/superpowers/plans/2026-08-18-ai-film-studio-core-engine.md` and
