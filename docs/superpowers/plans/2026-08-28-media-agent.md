@@ -239,8 +239,8 @@ A human's complaint about relative timing is filed with `target sync` (it's not 
 
 ```bash
 ai-film add-feedback --shot SHOT_ID --target sync --at 3.0 --note "voice comes in early"
-ai-film apply-audio-offset --shot SHOT_ID --track voice --offset-ms -400
-ai-film resolve-feedback --shot SHOT_ID --id FB-00N --resolution "voice offset -400ms"
+ai-film apply-audio-offset --shot SHOT_ID --track voice --offset-ms 400
+ai-film resolve-feedback --shot SHOT_ID --id FB-00N --resolution "voice offset +400ms"
 ```
 
 The feedback entry's `target` stays `sync` (that's what was reviewed); the `resolution` text names what was actually changed.
@@ -363,12 +363,12 @@ test -f /tmp/afs-media-check/07_review/S01_SH01.html && echo "REVIEW PAGE BUILT"
 .venv/bin/ai-film add-feedback --shot S01_SH01 --target sync --note "voice comes in early" --at 1.0 --path /tmp/afs-media-check
 if command -v ffmpeg > /dev/null 2>&1; then
   ffmpeg -y -f lavfi -i anullsrc=r=8000:cl=mono -t 1 /tmp/afs-media-check/06_audio/dialogue/S01_SH01.wav
-  .venv/bin/ai-film apply-audio-offset --shot S01_SH01 --track voice --offset-ms -400 --path /tmp/afs-media-check
+  .venv/bin/ai-film apply-audio-offset --shot S01_SH01 --track voice --offset-ms 400 --path /tmp/afs-media-check
   echo "OFFSET APPLIED"
 else
   echo "ffmpeg not available in this environment — apply-audio-offset step skipped for this run (the file's Step 4 documents it failing cleanly, not crashing, when ffmpeg is missing)"
 fi
-.venv/bin/ai-film resolve-feedback --shot S01_SH01 --id FB-001 --resolution "voice offset -400ms" --path /tmp/afs-media-check
+.venv/bin/ai-film resolve-feedback --shot S01_SH01 --id FB-001 --resolution "voice offset +400ms" --path /tmp/afs-media-check
 
 # Step 4 Pass 1: a field-edit complaint — the exact python snippet the whitelist table instructs
 .venv/bin/python3 -c "
@@ -454,7 +454,7 @@ Compute `IN_SCOPE_SHOT_IDS` — every shot ID under `03_shots/*.json` whose `gen
 python3 -c "
 import json, glob
 ids = []
-for path in sorted(glob.glob('PROJECT_PATH/03_shots/*.json')):
+for path in sorted(p for p in glob.glob('PROJECT_PATH/03_shots/*.json') if not p.endswith('.feedback.json')):
     shot = json.load(open(path))
     if shot['generation']['image'].get('artifact'):
         ids.append(shot['id'])
@@ -517,7 +517,7 @@ EOF
 python3 -c "
 import json, glob
 ids = []
-for path in sorted(glob.glob('/tmp/afs-scope-check/03_shots/*.json')):
+for path in sorted(p for p in glob.glob('/tmp/afs-scope-check/03_shots/*.json') if not p.endswith('.feedback.json')):
     shot = json.load(open(path))
     if shot['generation']['image'].get('artifact'):
         ids.append(shot['id'])
@@ -596,7 +596,7 @@ EOF
 IN_SCOPE=$(python3 -c "
 import json, glob
 ids = []
-for path in sorted(glob.glob('/tmp/afs-media-golden/03_shots/*.json')):
+for path in sorted(p for p in glob.glob('/tmp/afs-media-golden/03_shots/*.json') if not p.endswith('.feedback.json')):
     shot = json.load(open(path))
     if shot['generation']['image'].get('artifact'):
         ids.append(shot['id'])
