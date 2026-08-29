@@ -51,7 +51,7 @@ Only act on a `HUMAN_RESPONSE` whose `id` matches the question you actually aske
 
 Read `PROJECT_PATH/03_shots/SHOT_ID.json`. This shot's `generation.image.artifact` is already populated (that's why it's in `IN_SCOPE_SHOT_IDS` at all — the orchestrator only includes shots the Storyboard phase already locked). Determine which of these three states applies, in this order:
 
-1. **Open feedback entries remain** (from an earlier, interrupted dispatch on this same shot — within one dispatch, Step 4 always runs until every item is resolved or explicitly paused, so open entries only exist across dispatches). Run `ai-film review-media --shot SHOT_ID`, read the open entries directly from the shot's feedback log (`PROJECT_PATH/03_shots/SHOT_ID.feedback.json`), and emit `NEEDS_INPUT` with `type: clarification` (`id: shot_resume_SHOT_ID`) summarizing them and asking whether the human wants to proceed with fixing them now, change what they said, or drop any of them. **Do not assume a reply already exists to classify — there is none yet in a fresh dispatch.** Once resumed with a real answer, treat it exactly like a Step 3 reply and continue into Step 4's Pass 1 classification. Do not re-run Step 2's generation for this branch.
+1. **Open feedback entries remain** (from an earlier, interrupted dispatch on this same shot — within one dispatch, Step 4 always runs until every item is resolved or explicitly paused, so open entries only exist across dispatches). First run Step 2 below, unconditionally, exactly as it's written there (both `generate-video`/`generate-voice` calls — safe and free for stages already completed, since they're engine-idempotent no-ops; this branch is exactly the case where a shot can have open feedback *and* a still-missing stage, e.g. dialogue added to the shot after an earlier interrupted run, and skipping Step 2 here would leave that stage permanently ungenerated across every future dispatch too, since this branch always routes back into itself while feedback stays open). Then run `ai-film review-media --shot SHOT_ID`, read the open entries directly from the shot's feedback log (`PROJECT_PATH/03_shots/SHOT_ID.feedback.json`), and emit `NEEDS_INPUT` with `type: clarification` (`id: shot_resume_SHOT_ID`) summarizing them and asking whether the human wants to proceed with fixing them now, change what they said, or drop any of them (a "drop" is closed the same way any other resolution is — `ai-film resolve-feedback --shot SHOT_ID --id <FB-id> --resolution "dropped at the human's request"`; there's no delete operation, only `open` → `resolved`). **Do not assume a reply already exists to classify — there is none yet in a fresh dispatch.** Once resumed with a real answer: these complaints already have feedback entries (the `FB-00N` ids you just summarized, filed in an earlier dispatch) — **skip Pass 1's `add-feedback` call for them.** Apply the resumed answer directly to the existing entries, classifying/fixing each one into the same categories Pass 1 uses (cheap fix / field edit / new-stage-request / not-confidently-mappable), just without re-filing what's already filed — calling `add-feedback` again here would create duplicate entries that never get resolved, since `add-feedback`'s id assignment is purely positional with no dedup. Then continue into Pass 2's confirmation/clarification round trips and the rest of Step 4 as normal.
 2. **No open feedback, and this dispatch has not yet asked the human about this shot.** This is `REVIEW_REQUIRED` — continue to Step 2. This is true whether or not `generation.video`/`generation.voice` already show `status: "completed"` from an earlier run: **a completed artifact is not the same as a human having reviewed and approved it.** There is no persisted "confirmed" flag anywhere in this project — confirmation is a fact about *this conversation*, not project state (no `shot.json` field, no feedback-log entry, no other file records it). If you are re-dispatched for a shot whose video was generated and confirmed in an earlier, separate run, you have no way to know that happened, by design — you re-derive `REVIEW_REQUIRED` and ask again.
 3. **The human already confirmed this shot earlier in *this same* dispatch.** You're done — go to "When you're done" below.
 
@@ -98,6 +98,8 @@ ai-film approve-generation --scope storyboard --targets <every id in IN_SCOPE_SH
 
 **A generation call is only ever eligible to rely on this approval when its shot ID is in `IN_SCOPE_SHOT_IDS`.** You own exactly one shot (`SHOT_ID`) — you have no legitimate reason to call any `generate-*`/`apply-audio-offset` command for any other shot ID, regardless of what `config.json`'s stored approval record happens to contain (it may technically cover other shot IDs from an earlier, unrelated run — that's not license to act on them from here).
 
+**Note on approval scope:** `approve-generation --scope storyboard` replaces any prior storyboard-scope approval wholesale, not additively — this includes the Storyboard agent's own `shot:<id>:image` approvals from its Step 4. By the time Step 5 dispatches you, every shot in scope already has a locked image (that work is done), so this replacement has no practical effect on this run — but it's worth knowing the approval record isn't cumulative if you ever need to reason about what's actually authorized at a given moment.
+
 If a `generate-video`/`generate-voice` call fails with any other error (a `ProviderError`, not a cost-gate error): do not retry it yourself. Emit `NEEDS_INPUT` with `type: confirmation` (`id: generation_error_SHOT_ID`) showing the exact error text and offering: retry, adjust the shot's fields first (see Step 4's whitelist below), or skip this shot for now and report it unresolved when you're done. Stop your turn. Act only once resumed.
 
 ## Step 3: Open the review page and ask — the perception rule
@@ -108,7 +110,7 @@ ai-film review-media --shot SHOT_ID
 
 **Hard rule, not a style preference: you MUST NOT claim to have visually or audibly evaluated media you cannot directly perceive.** You can inspect: the `review-media` HTML's structure and text content via Read, artifact durations and version/history metadata from `shot.json`, and any waveform PNGs the review page generated (also via Read — your Read tool does display image content, the same capability you rely on for storyboard images elsewhere in this project, so a waveform PNG is genuinely inspectable; the actual video/audio media files are not).
 
-Phrase your question around what you actually know, never around a fabricated impression. Correct: *"I've generated this shot — the review page shows a 6.0s video and a 3.2s voice track. What do you think?"* Wrong: *"The voice sounds too fast."* — you cannot know this.
+Phrase your question around what you actually know, never around a fabricated impression. Correct: *"I've generated this shot — shot.json shows a 6.0s video and a 3.2s voice track. What do you think?"* (both numbers come from the artifacts' `duration_seconds` fields in `shot.json`, not from the review page — the review page renders the video with ruler ticks but doesn't display a numeric audio duration). Wrong: *"The voice sounds too fast."* — you cannot know this.
 
 Emit `NEEDS_INPUT` with `type: clarification` (`id: shot_feedback_SHOT_ID_1`, incrementing for later rounds on this same shot) asking the open-ended question above, and stop your turn.
 
@@ -141,13 +143,13 @@ from ai_film.shot_store import load_shot, save_shot
 from pathlib import Path
 path = Path('PROJECT_PATH/03_shots/SHOT_ID.json')
 shot = load_shot(path)
-shot['<field>'] = '<new value>'   # or shot['dialogue']['text'] = '...' for a nested field
+shot['<field>'] = '<new value>'   # nested fields: shot['dialogue']['text'], shot['camera']['movement'], shot['visual']['style'], etc.
 save_shot(path, shot)
 "
 ```
 
   **Don't regenerate yet** — see "Regenerate once per stage" below.
-- **New stage requested** — the complaint explicitly asks for sfx or music where the shot currently has `not_required`. Don't call `generate-sfx`/`generate-music` yet — collect it for the confirmation pass below, even though the existing film-wide approval technically permits the call (the engine's cost gate doesn't distinguish stages, only shot IDs): asking first here is your own policy, not something the engine enforces for you.
+- **New stage requested** — the complaint explicitly asks for sfx or music where the shot currently has `not_required`. Don't call `generate-sfx`/`generate-music` yet — collect it for the confirmation pass below, even though the existing film-wide approval technically permits the call (the engine's cost gate doesn't distinguish stages, only shot IDs): asking first here is your own policy, not something the engine enforces for you. When you do generate it (Pass 2, below), remember `--prompt` is **required** by both commands — unlike `generate-video`/`generate-voice`, there's no fallback derivation from the shot's fields — and `generate-music` also takes `--duration-seconds` (defaults to 30.0, almost always wrong for a shot; pass the shot's own `duration_seconds` field).
 - **Not confidently mappable** — the complaint doesn't clearly fit any of the above. Don't guess — collect it for the clarification pass below.
 
 **Whitelisted field edits** — you may directly edit only these fields; anything else falls into "not confidently mappable" above:
@@ -166,11 +168,21 @@ save_shot(path, shot)
 - If any complaints were classified "new stage requested," bundle all of them into one `NEEDS_INPUT type: confirmation` (`id: new_stage_confirm_SHOT_ID_1`) — e.g. "you asked for music on this shot — confirm generating it?" covering every such item from this reply — and stop the turn until resumed.
 - If any complaints were classified "not confidently mappable," bundle all of them into one `NEEDS_INPUT type: clarification` (`id: shot_clarify_SHOT_ID_1`) — e.g. "do you want the camera movement changed, or the character's action?" covering every unmapped item from this reply — and stop the turn until resumed.
 - These are two different `NEEDS_INPUT` types, so they're two distinct round trips when both are needed — but each is still exactly one round trip regardless of how many items it covers. If Pass 1 left nothing pending in a category, skip that round trip entirely.
-- Once resumed, treat each answer like a Pass 1 outcome: an approved new-stage request becomes a first-time-generation case (no field to edit, just `generate-sfx`/`generate-music --force` in the next step); a clarified ambiguous item becomes a field edit or cheap fix per what the human actually said.
+- Once resumed, treat each answer like a Pass 1 outcome: an approved new-stage request becomes a first-time-generation case — no field to edit, and no `--force` either (the stage is `not_required`, not `completed`, so a plain call generates it; `--force` is only for regenerating a stage that's already `completed`):
+
+```bash
+ai-film generate-sfx --shot SHOT_ID --prompt "<what the human asked for, in your own words>"
+```
+
+```bash
+ai-film generate-music --shot SHOT_ID --prompt "<what the human asked for, in your own words>" --duration-seconds <the shot's duration_seconds field>
+```
+
+  A clarified ambiguous item becomes a field edit or cheap fix per what the human actually said.
 
 ### Regenerate once per stage, after all passes are done, not once per feedback item
 
-Track every stage (`video`, `voice`, and — only if a new-stage request was approved — `sfx`/`music`) that had at least one field edit or first-time-generation approval across *all* passes in this round. Once every edit/approval for this round is in, call `--force` regeneration **at most once per affected stage** — e.g. one complaint about `camera` and another about `action` in the same reply produce exactly one `generate-video --force`, not two, even though they touch different fields. This is a cost control, not just tidiness: each stage's `--force` call is real spend, and a human's single reply must not silently trigger more paid generations than the number of stages it actually touched.
+Track every stage (`video`, `voice`, and — only if a new-stage request was approved — `sfx`/`music`) that had at least one field edit or first-time-generation approval across *all* passes in this round. Once every edit/approval for this round is in, regenerate **at most once per affected stage** — e.g. one complaint about `camera` and another about `action` in the same reply produce exactly one `generate-video --force` call, not two, even though they touch different fields. This is a cost control, not just tidiness: each stage's regeneration call is real spend, and a human's single reply must not silently trigger more paid generations than the number of stages it actually touched. **Use `--force` for every stage in this list except a first-time sfx/music generation** — a field edit always regenerates an already-`completed` stage (so it needs `--force` to override the engine's completed-stage no-op), but a newly-approved sfx/music request starts from `not_required`, so the plain (no `--force`) call in the previous section already generates it; adding `--force` there is unnecessary, not merely redundant-but-harmless.
 
 If a `--force` regeneration fails (`ProviderError`), handle it exactly like Step 2's provider-error case: `NEEDS_INPUT type: confirmation` with the exact error, offering retry/adjust/skip, never retried silently. You rely entirely on the engine's own existing archive/restore behavior to leave the shot's prior artifact intact when this happens — **you MUST NOT implement your own artifact backup, rollback, or recovery logic**; if the engine's guarantee here were ever insufficient, that's a defect to fix in the engine, not something to work around here.
 
@@ -180,8 +192,8 @@ A human's complaint about relative timing is filed with `target sync` (it's not 
 
 ```bash
 ai-film add-feedback --shot SHOT_ID --target sync --at 3.0 --note "voice comes in early"
-ai-film apply-audio-offset --shot SHOT_ID --track voice --offset-ms -400
-ai-film resolve-feedback --shot SHOT_ID --id FB-00N --resolution "voice offset -400ms"
+ai-film apply-audio-offset --shot SHOT_ID --track voice --offset-ms 400
+ai-film resolve-feedback --shot SHOT_ID --id FB-00N --resolution "voice offset +400ms"
 ```
 
 The feedback entry's `target` stays `sync` (that's what was reviewed); the `resolution` text names what was actually changed.
