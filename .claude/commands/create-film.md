@@ -9,7 +9,7 @@ The single entry point for starting or resuming a film with `ai-film-studio`. Sc
 
 ## The human-in-the-loop protocol (you are the orchestrator side of this)
 
-The `ai-film-director`, `ai-film-character`, and `ai-film-storyboard` subagents you dispatch below have no live channel to the user themselves — only you do, since you're running in this actual conversation. Whenever one of them needs a real answer, its final report ends with, verbatim:
+The `ai-film-director`, `ai-film-character`, `ai-film-storyboard`, and `ai-film-media` subagents you dispatch below have no live channel to the user themselves — only you do, since you're running in this actual conversation. Whenever one of them needs a real answer, its final report ends with, verbatim:
 
 ```
 NEEDS_INPUT:
@@ -80,6 +80,28 @@ For each name in the parsed `CHARACTERS` list, **one at a time, in order** (neve
 
 Once every character from Step 3 is locked (or Step 3 was skipped because there were no characters), dispatch the `ai-film-storyboard` subagent once, with `PROJECT_PATH` as its project root. It internally handles every scene and shot in one run — run the protocol loop above until it reports a genuine completion.
 
-## Step 5: Wrap up
+## Step 5: Run the Media agent, once per shot with a locked image
 
-After the Storyboard agent's completion report, show the user its summary (shots locked, anything left unresolved) and remind them that `/ai-film-setup` can be re-run anytime to change providers, and that `generate-video`/`generate-voice`/`generate-sfx`/`generate-music`/`render` are manual next steps run directly via the `ai-film` CLI, same as documented in the project's README.
+Compute `IN_SCOPE_SHOT_IDS` — every shot ID under `03_shots/*.json` whose `generation.image.artifact` is not `null` (every shot the Storyboard phase locked, this run or an earlier one):
+
+```bash
+python3 -c "
+import json, glob
+ids = []
+for path in sorted(glob.glob('PROJECT_PATH/03_shots/*.json')):
+    shot = json.load(open(path))
+    if shot['generation']['image'].get('artifact'):
+        ids.append(shot['id'])
+print(','.join(ids))
+"
+```
+
+(substitute the real `PROJECT_PATH` for the literal text above; this reads plain JSON with the standard library only, no `ai_film` import needed, so it works with a bare `python3` regardless of which form `AI_FILM_BIN` resolved to in Step 0). This list is fixed **once**, before dispatching the first shot below — do not recompute it partway through this step, even if a later shot's dispatch changes what's on disk.
+
+If the list is empty (no shot has a locked image yet — shouldn't happen after Step 4 completes normally, but possible if Step 4 was skipped or every shot failed continuity), skip this step entirely and go to Step 6.
+
+For each shot ID in that list, **one at a time, in order** (never in parallel — each run's protocol loop needs your real, in-order attention): dispatch the `ai-film-media` subagent with `PROJECT_PATH`, that one shot ID, and the complete `IN_SCOPE_SHOT_IDS` list. Run the protocol loop above until it reports a genuine completion, then move to the next shot ID.
+
+## Step 6: Wrap up
+
+After every shot's Media agent run reports completion, show the user a summary (how many shots were reviewed and confirmed, any left with open feedback because the human asked to pause) and remind them that `/ai-film-setup` can be re-run anytime to change providers, and that `render` is the one remaining manual step, run directly via the `ai-film` CLI, same as documented in the project's README.
