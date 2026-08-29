@@ -1,11 +1,11 @@
 ---
-description: Start or resume a film — scaffolds the project, then runs the Director, Character, and Storyboard agents in sequence through conversation.
+description: Start or resume a film — scaffolds the project, then runs the Director, Character, Storyboard, and Media agents in sequence through conversation.
 argument-hint: "\"<Title>\" [project-path]"
 ---
 
 # /create-film
 
-The single entry point for starting or resuming a film with `ai-film-studio`. Scaffolds (or resumes) a project, then walks the whole story -> character -> shot -> locked storyboard image pipeline through conversation, dispatching the three pipeline agents in order and relaying your answers to them per the protocol below.
+The single entry point for starting or resuming a film with `ai-film-studio`. Scaffolds (or resumes) a project, then walks the whole story -> character -> shot -> locked storyboard image -> reviewed video/voice pipeline through conversation, dispatching the four pipeline agents in order and relaying your answers to them per the protocol below.
 
 ## The human-in-the-loop protocol (you are the orchestrator side of this)
 
@@ -47,13 +47,13 @@ message: <the user's stated reason, only if approved is false>
 
 ## Step 0: Preflight — resolve a working `ai-film` binary
 
-Do this before anything else; every later step needs a binary that actually works. Do not require the user to manually activate a venv if you can avoid it — resolve around it instead. Only ever use one of the two fixed forms below (never a machine-specific absolute path) — this repo ships `.claude/settings.json` pre-authorizing the non-spend `ai-film` subcommands under these two forms (`init`, `version`, `validate`, `status`, `models`, `check-continuity`, `review`, `select-candidate`). It deliberately does **not** pre-authorize `approve-generation`, `generate-candidates`, or `edit-candidate` — those still show a Bash permission prompt every time, on top of (not instead of) the `NEEDS_INPUT`/`HUMAN_RESPONSE` cost-approval protocol below. That's intentional defense in depth for anything that can spend real money; don't try to route around it or suggest the user add those to their allow-list. Run each check as a single, plain command — never chain it with `; echo ...` or any other trailing command to inspect the exit code; your Bash tool already reports success/failure and any error output directly in its own result.
+Do this before anything else; every later step needs a binary that actually works. Do not require the user to manually activate a venv if you can avoid it — resolve around it instead. Only ever use one of the two fixed forms below (never a machine-specific absolute path) — this repo ships `.claude/settings.json` pre-authorizing the non-spend `ai-film` subcommands under these two forms (`init`, `version`, `validate`, `status`, `models`, `check-continuity`, `review`, `select-candidate`, `review-media`, `add-feedback`, `resolve-feedback`). It deliberately does **not** pre-authorize `approve-generation`, `generate-candidates`, `edit-candidate`, `generate-video`, `generate-voice`, `generate-sfx`, `generate-music`, or `apply-audio-offset` — those still show a Bash permission prompt every time, on top of (not instead of) the `NEEDS_INPUT`/`HUMAN_RESPONSE` cost-approval protocol below. That's intentional defense in depth for anything that can spend real money; don't try to route around it or suggest the user add those to their allow-list. Run each check as a single, plain command — never chain it with `; echo ...` or any other trailing command to inspect the exit code; your Bash tool already reports success/failure and any error output directly in its own result.
 
 1. Run `ai-film version` by itself. If it succeeds and prints a version, you're done: set `AI_FILM_BIN` to the literal string `ai-film` and skip straight to `## Parse arguments` below (do not confuse this with the numbered items in this checklist — there is no "step 1" among them, only 1/2/3 here).
 2. If that fails — command not found, *or* found but erroring (e.g. a stale/broken shim like `ModuleNotFoundError: No module named 'ai_film'`, which means something else on `PATH` shadowed the real one) — run `./.venv/bin/ai-film version` by itself, relative to the current working directory (this is where `claude` was launched from, which per the README is meant to be the `ai-film-studio` repo checkout itself). If that succeeds, set `AI_FILM_BIN` to the literal string `./.venv/bin/ai-film` (relative, exactly as written — do not expand it to an absolute path) and use it for every `ai-film` invocation for the rest of this run. Do not ask the user to `source .venv/bin/activate`.
 3. If neither works, check whether `./pyproject.toml` exists (confirms you're in the right repo, just not set up yet). If it does, tell the user no working `ai-film` install was found and ask whether you should set one up now (`python3 -m venv .venv` then `.venv/bin/pip install -e ".[dev]"`, matching the README's install step). If they say yes, run it, then retry step 2 above. If `./pyproject.toml` doesn't exist either, this isn't the `ai-film-studio` repo checkout at all — tell the user to run `claude` from inside it instead, and stop; there's nothing to self-heal here.
 
-From here on, every instruction in this file and in the three dispatched agents' own instructions that says `ai-film <command>` means `AI_FILM_BIN <command>` — substitute the resolved value. You don't need to pass `AI_FILM_BIN` down when dispatching the `ai-film-character` and `ai-film-storyboard` subagents in Steps 3-4 below — each one runs this exact same resolution independently (they inherit the same working directory you're running in, so they'll resolve the same value).
+From here on, every instruction in this file and in the four dispatched agents' own instructions that says `ai-film <command>` means `AI_FILM_BIN <command>` — substitute the resolved value. You don't need to pass `AI_FILM_BIN` down when dispatching the `ai-film-character`, `ai-film-storyboard`, and `ai-film-media` subagents in Steps 3-5 below — each one runs this exact same resolution independently (they inherit the same working directory you're running in, so they'll resolve the same value).
 
 This command does not itself check `FAL_KEY` or provider configuration — if the user hasn't run `/ai-film-setup` yet, mention it's available, but don't block on it here (the mock provider works with zero configuration, so a fresh project is still usable without it).
 
@@ -88,7 +88,7 @@ Compute `IN_SCOPE_SHOT_IDS` — every shot ID under `03_shots/*.json` whose `gen
 python3 -c "
 import json, glob
 ids = []
-for path in sorted(glob.glob('PROJECT_PATH/03_shots/*.json')):
+for path in sorted(p for p in glob.glob('PROJECT_PATH/03_shots/*.json') if not p.endswith('.feedback.json')):
     shot = json.load(open(path))
     if shot['generation']['image'].get('artifact'):
         ids.append(shot['id'])
