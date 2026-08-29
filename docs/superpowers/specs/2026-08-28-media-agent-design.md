@@ -152,9 +152,11 @@ For each distinct complaint: call `add-feedback` with the agent's best judgment 
 
 ```
 add-feedback --target sync --at 3.0 --note "voice comes in early"
-apply-audio-offset --track voice --offset-ms -400
-resolve-feedback --id FB-00N --resolution "voice offset -400ms"
+apply-audio-offset --track voice --offset-ms 400
+resolve-feedback --id FB-00N --resolution "voice offset +400ms"
 ```
+
+*(Corrected during final review: "voice comes in early" needs the track delayed. Per the engine's real `apply_audio_offset` behavior — a positive `--offset-ms` prepends silence (delays); a negative one trims from the head (advances) — the fix for "early" is a positive offset. The example previously had the sign backwards.)*
 
 The feedback entry's `target` stays `sync` (that's what was reviewed); the `resolution` text names what was actually changed. Nothing in the engine needs to change for this — `target` and `resolution` are already independent fields in the feedback log.
 
