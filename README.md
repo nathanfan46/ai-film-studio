@@ -236,13 +236,20 @@ implementation history.
 
 The Claude Code Agent layer is implemented: `/ai-film-setup` configures providers,
 `/create-film "Title"` scaffolds a project and walks the whole story -> character ->
-shot -> reviewed-storyboard-image pipeline through conversation, dispatching the
-`ai-film-director`, `ai-film-character`, and `ai-film-storyboard` subagents in turn.
-See `docs/superpowers/specs/2026-08-23-agent-layer-design.md` and
-`docs/superpowers/plans/2026-08-23-agent-layer.md` for the design and implementation
+shot -> reviewed-storyboard-image -> reviewed-video pipeline through conversation,
+dispatching the `ai-film-director`, `ai-film-character`, `ai-film-storyboard`, and
+`ai-film-media` subagents in turn. The Media agent generates each shot's video (and
+voice, if it has dialogue), opens the static review page, and applies fixes — a cheap
+audio-offset nudge, a targeted `shot.json` field edit plus regeneration, or a
+clarifying question — until you confirm the shot; sfx/music generate only when you
+explicitly ask for them on a shot. See
+`docs/superpowers/specs/2026-08-23-agent-layer-design.md`,
+`docs/superpowers/plans/2026-08-23-agent-layer.md`,
+`docs/superpowers/specs/2026-08-28-media-agent-design.md`, and
+`docs/superpowers/plans/2026-08-28-media-agent.md` for the design and implementation
 history.
 
-**To use it:** the `/ai-film-setup` and `/create-film` commands and their three
+**To use it:** the `/ai-film-setup` and `/create-film` commands and their four
 agents live in this repo's own `.claude/commands/` and `.claude/agents/` — Claude
 Code only discovers project-local commands/agents when you run `claude` from a
 directory whose `.claude/` contains them. Run `claude` from this repo checkout to
@@ -251,12 +258,14 @@ use them (the film project itself doesn't have to live here — `/create-film "T
 title>` inside wherever you ran `claude` from). To use these commands from a
 different working directory or a separate film-only repo, copy or symlink
 `.claude/commands/ai-film-setup.md`, `.claude/commands/create-film.md`, and the
-three files under `.claude/agents/` into that directory's own `.claude/` (or into
+four files under `.claude/agents/` into that directory's own `.claude/` (or into
 `~/.claude/commands/` and `~/.claude/agents/` to make them available everywhere).
 
-Per that spec's Future Extensions: a dedicated Continuity agent if shot volume ever
-justifies a second independent-context pass, video/audio candidate review once the
-engine gains video candidate storage and an edit/regenerate loop for clips, voice/
-sfx/music generation agents and an Editor agent for final assembly, and a
-programmatic cost-estimation engine in `ai_film` replacing the static per-model
-prompt-knowledge table the agents use today.
+Per those specs' Future Extensions: a dedicated Continuity agent if shot volume ever
+justifies a second independent-context pass; a standalone entry point for revisiting
+media review on an already-built film without going through `/create-film` again;
+divergent (N-way) video candidate exploration, distinct from the sequential
+generate-review-fix loop the Media agent already does today; automatic sfx/music
+suggestion rather than only generating them on explicit request; an Editor agent for
+final assembly; and a programmatic cost-estimation engine in `ai_film` replacing the
+static per-model prompt-knowledge tables the agents use today.
