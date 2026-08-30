@@ -38,7 +38,13 @@ from ai_film.feedback_store import (
     resolve_feedback_entry as resolve_feedback_entry_service,
 )
 from ai_film.media_review import build_media_review
-from ai_film.shot_store import list_shot_paths, load_shot, save_shot
+from ai_film.shot_store import (
+    list_shot_paths,
+    load_shot,
+    previous_shot_id,
+    previous_shot_image_reference,
+    save_shot,
+)
 
 app = typer.Typer(name="ai-film", help="AI Film Studio production engine.")
 
@@ -123,6 +129,30 @@ def _run_generation(shot_id: str, stage_name: str, run_fn) -> None:
     typer.echo(f"{shot_id}: {stage_name} {result['status']}")
 
 
+def _character_and_environment_references(path: Path, shot_data: dict) -> list[str]:
+    references = []
+    if shot_data.get("environment", {}).get("reference"):
+        references.append(str(path / shot_data["environment"]["reference"]))
+    references += [
+        str(path / c["reference"]) for c in shot_data.get("characters", []) if c.get("reference")
+    ]
+    return references
+
+
+def _image_references(path: Path, shot_id: str, shot_data: dict) -> list[str]:
+    references = _character_and_environment_references(path, shot_data)
+    prev_ref = previous_shot_image_reference(path, shot_id)
+    if prev_ref:
+        references.append(str(path / prev_ref))
+    elif previous_shot_id(shot_id) is not None:
+        typer.echo(
+            f"note: {shot_id}'s predecessor in this scene has no locked image yet — "
+            f"generating without a continuity anchor",
+            err=True,
+        )
+    return references
+
+
 @app.command(name="generate-image")
 def generate_image_cmd(
     shot: str = typer.Option(..., "--shot"),
@@ -132,9 +162,7 @@ def generate_image_cmd(
     stage_config, gen_config = _stage_config(path, "image")
     shot_path = path / "03_shots" / f"{shot}.json"
     shot_data = load_shot(shot_path)
-    references = [
-        str(path / c["reference"]) for c in shot_data.get("characters", []) if c.get("reference")
-    ]
+    references = _image_references(path, shot, shot_data)
 
     def _run():
         provider = resolve_provider(Capability.IMAGE, stage_config["provider"])
@@ -387,11 +415,9 @@ def _build_stage_call(path: Path, shot_id: str, stage: str, force: bool):
     shot_path = path / "03_shots" / f"{shot_id}.json"
     shot_data = load_shot(shot_path)
     provider = resolve_provider(capability, stage_config["provider"])
-    references = [
-        str(path / c["reference"]) for c in shot_data.get("characters", []) if c.get("reference")
-    ]
 
     if stage == "image":
+        references = _image_references(path, shot_id, shot_data)
         return lambda: service_fn(
             project_dir=path, shot_path=shot_path, provider=provider,
             prompt=build_image_prompt(shot_data), model=stage_config["model"],
@@ -400,6 +426,9 @@ def _build_stage_call(path: Path, shot_id: str, stage: str, force: bool):
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
         )
     if stage == "video":
+        references = [
+            str(path / c["reference"]) for c in shot_data.get("characters", []) if c.get("reference")
+        ]
         return lambda: service_fn(
             project_dir=path, shot_path=shot_path, provider=provider,
             prompt=build_video_prompt(shot_data), model=stage_config["model"],
@@ -463,9 +492,7 @@ def generate_candidates_cmd(
     if target.startswith("shot:"):
         shot_id = target.split(":")[1]
         shot_data = load_shot(path / "03_shots" / f"{shot_id}.json")
-        references = [
-        str(path / c["reference"]) for c in shot_data.get("characters", []) if c.get("reference")
-    ]
+        references = _image_references(path, shot_id, shot_data)
         if prompt is None:
             prompt = build_image_prompt(shot_data)
     elif prompt is None:

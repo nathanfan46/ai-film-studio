@@ -8,8 +8,52 @@ from typer.testing import CliRunner
 
 from ai_film.cli import app
 from ai_film.shot_store import load_shot, save_shot
+from ai_film.models import Capability, GenerationJob, ImageGenerationResult, JobStatus
 
 runner = CliRunner()
+
+
+class _RecordingImageProvider:
+    """Captures every ImageGenerationRequest.submit() call so tests can
+    assert on the reference_paths the cli layer built, without touching
+    the real mock provider (which ignores reference_paths entirely)."""
+
+    def __init__(self):
+        self.requests = []
+
+    def submit(self, request):
+        self.requests.append(request)
+        return GenerationJob(provider="mock", id=f"job{len(self.requests)}", capability=Capability.IMAGE)
+
+    def poll(self, job):
+        return JobStatus.COMPLETED
+
+    def get_result(self, job):
+        request = self.requests[-1]
+        return ImageGenerationResult(artifact_path=request.output_path, size_bytes=1)
+
+
+class _RecordingCandidatesProvider:
+    """Same idea as _RecordingImageProvider, for generate-candidates
+    (which calls get_results, plural, and needs a real file on disk for
+    each result since candidate_service.py renames it)."""
+
+    def __init__(self):
+        self.requests = []
+
+    def submit(self, request):
+        self.requests.append(request)
+        return GenerationJob(provider="mock", id=f"job{len(self.requests)}", capability=Capability.IMAGE)
+
+    def poll(self, job):
+        return JobStatus.COMPLETED
+
+    def get_results(self, job, output_dir):
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        result_path = out_dir / "raw_result.png"
+        result_path.write_bytes(b"fake")
+        return [ImageGenerationResult(artifact_path=str(result_path), size_bytes=4)]
 
 
 def _shot(shot_id: str) -> dict:
@@ -240,3 +284,130 @@ def test_render_reports_clean_error_when_ffmpeg_fails(tmp_path: Path):
     assert result.exit_code == 1
     assert result.output.strip() != ""
     assert not isinstance(result.exception, subprocess.CalledProcessError)
+
+
+def test_generate_image_includes_environment_reference_first(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["environment"] = {
+        "name": "hospital_corridor",
+        "reference": "assets/environments/hospital_corridor/reference.png",
+    }
+    shot["characters"] = [{"name": "Mara", "reference": "assets/characters/Mara/reference.png"}]
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _approve(project_dir)
+
+    provider = _RecordingImageProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-image", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].reference_paths == [
+        str(project_dir / "assets/environments/hospital_corridor/reference.png"),
+        str(project_dir / "assets/characters/Mara/reference.png"),
+    ]
+
+
+def test_generate_image_scenes_first_shot_has_no_predecessor_note(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    _approve(project_dir)
+
+    provider = _RecordingImageProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-image", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].reference_paths == []
+    assert "predecessor" not in result.output
+
+
+def test_generate_image_notes_when_predecessor_not_locked_yet(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)  # writes S01_SH01, no locked image
+    save_shot(project_dir / "03_shots" / "S01_SH02.json", _shot("S01_SH02"))
+    _approve(project_dir, "S01_SH02")
+
+    provider = _RecordingImageProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-image", "--shot", "S01_SH02", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].reference_paths == []
+    assert "S01_SH02's predecessor in this scene has no locked image yet" in result.output
+
+
+def test_generate_image_chains_locked_predecessor_last(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    shot1 = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot1["environment"] = {
+        "name": "hospital_corridor",
+        "reference": "assets/environments/hospital_corridor/reference.png",
+    }
+    shot1["generation"]["image"] = {
+        "status": "completed",
+        "attempts": 1,
+        "artifact": {"path": "04_storyboard/S01_SH01.png", "size_bytes": 10, "sha256": None},
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot1)
+    shot2 = _shot("S01_SH02")
+    shot2["environment"] = shot1["environment"]
+    save_shot(project_dir / "03_shots" / "S01_SH02.json", shot2)
+    _approve(project_dir, "S01_SH02")
+
+    provider = _RecordingImageProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-image", "--shot", "S01_SH02", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].reference_paths == [
+        str(project_dir / "assets/environments/hospital_corridor/reference.png"),
+        str(project_dir / "04_storyboard" / "S01_SH01.png"),
+    ]
+
+
+def test_generate_candidates_shot_target_includes_environment_reference(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["environment"] = {
+        "name": "hospital_corridor",
+        "reference": "assets/environments/hospital_corridor/reference.png",
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    runner.invoke(
+        app,
+        [
+            "approve-generation", "--scope", "storyboard", "--targets", "shot:S01_SH01:image",
+            "--path", str(project_dir),
+        ],
+    )
+
+    provider = _RecordingCandidatesProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(
+        app,
+        ["generate-candidates", "--target", "shot:S01_SH01:image", "--count", "1", "--path", str(project_dir)],
+    )
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].reference_paths == [
+        str(project_dir / "assets/environments/hospital_corridor/reference.png")
+    ]
+
+
+def test_generate_all_image_includes_environment_reference(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["environment"] = {
+        "name": "hospital_corridor",
+        "reference": "assets/environments/hospital_corridor/reference.png",
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _approve(project_dir)
+
+    provider = _RecordingImageProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-all", "--stage", "image", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].reference_paths == [
+        str(project_dir / "assets/environments/hospital_corridor/reference.png")
+    ]
