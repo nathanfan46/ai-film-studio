@@ -25,7 +25,7 @@ class FalImageProvider:
         app_id = MODEL_TO_APP_ID[request.model]
         input_data = {"prompt": request.prompt, "num_images": request.num_candidates}
         if request.reference_paths:
-            input_data["image_urls"] = request.reference_paths
+            input_data["image_urls"] = [client.upload_file(p) for p in request.reference_paths]
         job, status_url, response_url = client.submit(app_id, input_data, Capability.IMAGE)
         self._jobs[job.id] = (status_url, response_url, request)
         return job
@@ -75,7 +75,7 @@ class FalImageProvider:
     def submit_edit(self, request: ImageEditRequest) -> GenerationJob:
         input_data = {
             "prompt": request.instruction,
-            "image_urls": [request.base_image_path],
+            "image_urls": [client.upload_file(request.base_image_path)],
         }
         job, status_url, response_url = client.submit(EDIT_APP_ID, input_data, Capability.IMAGE)
         self._edits[job.id] = (status_url, response_url, request)

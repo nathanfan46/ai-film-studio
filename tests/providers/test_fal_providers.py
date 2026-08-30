@@ -180,6 +180,12 @@ def test_fal_image_provider_get_results_downloads_all_images(mock_requests, tmp_
 def test_fal_image_provider_submit_edit_full_lifecycle(mock_requests, tmp_path: Path, monkeypatch):
     monkeypatch.setenv("FAL_KEY", "test-key")
 
+    upload_initiate_response = MagicMock(status_code=200)
+    upload_initiate_response.json.return_value = {
+        "upload_url": "https://up.fal.media/put/edit-upload",
+        "file_url": "https://cdn.fal.run/uploaded/001.png",
+    }
+    upload_put_response = MagicMock(status_code=200)
     submit_response = MagicMock(status_code=200)
     submit_response.json.return_value = {
         "request_id": "req-edit-1",
@@ -192,7 +198,8 @@ def test_fal_image_provider_submit_edit_full_lifecycle(mock_requests, tmp_path: 
     result_response.json.return_value = {"images": [{"url": "https://cdn.fal.run/edited.png"}]}
     download_response = MagicMock(status_code=200, content=b"EDITED-PNG")
 
-    mock_requests.post.return_value = submit_response
+    mock_requests.post.side_effect = [upload_initiate_response, submit_response]
+    mock_requests.put.return_value = upload_put_response
     mock_requests.get.side_effect = [status_response, result_response, download_response]
 
     provider = FalImageProvider()

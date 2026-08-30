@@ -115,7 +115,7 @@ def test_generate_candidates_for_shot_target_passes_character_references(
     assert result.exit_code == 0, result.output
     assert len(provider._requests) == 1
     sent_request = next(iter(provider._requests.values()))
-    assert sent_request.reference_paths == ["assets/characters/girl/reference.png"]
+    assert sent_request.reference_paths == [str(project_dir / "assets/characters/girl/reference.png")]
 
 
 def test_generate_candidates_for_character_target_sends_no_references(

@@ -6,10 +6,24 @@ from ai_film.models import (
 from ai_film.providers.fal import client
 
 MODEL_TO_APP_ID = {
-    "veo-3": "fal-ai/veo-3",
+    "veo-3": "fal-ai/veo3",
     "seedance-1-0-pro": "fal-ai/seedance-1-0-pro",
     "kling-v3-pro": "fal-ai/kling-video/v3/pro",
 }
+
+# Models whose endpoints only accept a fixed set of clip durations. Requested
+# durations are snapped to the nearest allowed value (ties favor the shorter
+# clip) rather than sent through raw and rejected by the provider.
+MODEL_ALLOWED_DURATIONS = {
+    "veo-3": (4, 6, 8),
+}
+
+
+def _snap_duration(model: str, duration_seconds: float) -> int:
+    allowed = MODEL_ALLOWED_DURATIONS.get(model)
+    if not allowed:
+        return int(duration_seconds)
+    return min(allowed, key=lambda v: (abs(v - duration_seconds), v))
 
 
 class FalVideoProvider:
@@ -18,12 +32,13 @@ class FalVideoProvider:
 
     def submit(self, request: VideoGenerationRequest) -> GenerationJob:
         app_id = MODEL_TO_APP_ID[request.model]
+        duration = _snap_duration(request.model, request.duration_seconds)
         input_data = {
             "prompt": request.prompt,
-            "duration": f"{int(request.duration_seconds)}s",
+            "duration": f"{duration}s",
         }
         if request.reference_paths:
-            input_data["image_url"] = request.reference_paths[0]
+            input_data["image_url"] = client.upload_file(request.reference_paths[0])
         job, status_url, response_url = client.submit(app_id, input_data, Capability.VIDEO)
         self._jobs[job.id] = (status_url, response_url, request)
         return job

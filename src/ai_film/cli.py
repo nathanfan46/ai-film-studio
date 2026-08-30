@@ -132,7 +132,9 @@ def generate_image_cmd(
     stage_config, gen_config = _stage_config(path, "image")
     shot_path = path / "03_shots" / f"{shot}.json"
     shot_data = load_shot(shot_path)
-    references = [c["reference"] for c in shot_data.get("characters", []) if c.get("reference")]
+    references = [
+        str(path / c["reference"]) for c in shot_data.get("characters", []) if c.get("reference")
+    ]
 
     def _run():
         provider = resolve_provider(Capability.IMAGE, stage_config["provider"])
@@ -156,7 +158,9 @@ def generate_video_cmd(
     stage_config, gen_config = _stage_config(path, "video")
     shot_path = path / "03_shots" / f"{shot}.json"
     shot_data = load_shot(shot_path)
-    references = [c["reference"] for c in shot_data.get("characters", []) if c.get("reference")]
+    references = [
+        str(path / c["reference"]) for c in shot_data.get("characters", []) if c.get("reference")
+    ]
 
     def _run():
         provider = resolve_provider(Capability.VIDEO, stage_config["provider"])
@@ -383,7 +387,9 @@ def _build_stage_call(path: Path, shot_id: str, stage: str, force: bool):
     shot_path = path / "03_shots" / f"{shot_id}.json"
     shot_data = load_shot(shot_path)
     provider = resolve_provider(capability, stage_config["provider"])
-    references = [c["reference"] for c in shot_data.get("characters", []) if c.get("reference")]
+    references = [
+        str(path / c["reference"]) for c in shot_data.get("characters", []) if c.get("reference")
+    ]
 
     if stage == "image":
         return lambda: service_fn(
@@ -457,7 +463,9 @@ def generate_candidates_cmd(
     if target.startswith("shot:"):
         shot_id = target.split(":")[1]
         shot_data = load_shot(path / "03_shots" / f"{shot_id}.json")
-        references = [c["reference"] for c in shot_data.get("characters", []) if c.get("reference")]
+        references = [
+        str(path / c["reference"]) for c in shot_data.get("characters", []) if c.get("reference")
+    ]
         if prompt is None:
             prompt = build_image_prompt(shot_data)
     elif prompt is None:
