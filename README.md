@@ -5,8 +5,8 @@ pipeline. It scaffolds a project directory, tracks each shot's generation lifecy
 (image, video, voice, sfx, music) through a JSON shot store with a cost-gated approval
 workflow, and renders the completed shots into a final video with ffmpeg.
 
-`/create-film` (a Claude Code slash command) conducts story, character, and shot
-creation through conversation and writes `shot.json` for you — see Roadmap below.
+`/create-film` (a Claude Code slash command) conducts story, character, location, and
+shot creation through conversation and writes `shot.json` for you — see Roadmap below.
 This CLI is the production engine underneath that layer, and remains fully usable
 directly for anyone who prefers hand-authoring shots.
 
@@ -213,11 +213,6 @@ records each one.
 
 ## Known limitations (v1)
 
-- **Reference-image conditioning doesn't work against real fal.ai yet.** `generate-image`,
-  `generate-video`, and `generate-candidates` (for shot targets) all pass character
-  reference paths through correctly, but the fal providers send local file paths where
-  the API expects uploaded URLs — an upload step hasn't been implemented, so this only
-  works with the mock provider today.
 - **`render` drops audio.** Voice/sfx/music generate and save to disk correctly, but
   the render manifest doesn't include them yet — the final video is video-only.
 - **No crash-safety for in-flight jobs.** A killed process mid-generation loses track
@@ -236,18 +231,24 @@ implementation history.
 
 The Claude Code Agent layer is implemented: `/ai-film-setup` configures providers,
 `/create-film "Title"` scaffolds a project and walks the whole story -> character ->
-shot -> reviewed-storyboard-image -> reviewed-video pipeline through conversation,
-dispatching the `ai-film-director`, `ai-film-character`, `ai-film-storyboard`, and
-`ai-film-media` subagents in turn. The Media agent generates each shot's video (and
-voice, if it has dialogue), opens the static review page, and applies fixes — a cheap
-audio-offset nudge, a targeted `shot.json` field edit plus regeneration, or a
-clarifying question — until you confirm the shot; sfx/music generate only when you
-explicitly ask for them on a shot. See
+location -> shot -> reviewed-storyboard-image -> reviewed-video pipeline through
+conversation, dispatching the `ai-film-director`, `ai-film-character`,
+`ai-film-environment`, `ai-film-storyboard`, and `ai-film-media` subagents in turn.
+Locations get the same locked-reference-image treatment characters do — the
+Environment agent runs once per unique location the Director's scenes name, before
+Storyboard writes any shots, and every shot's generation conditions on its scene's
+locked location the same way it already conditions on its characters. The Media
+agent generates each shot's video (and voice, if it has dialogue), opens the static
+review page, and applies fixes — a cheap audio-offset nudge, a targeted `shot.json`
+field edit plus regeneration, or a clarifying question — until you confirm the shot;
+sfx/music generate only when you explicitly ask for them on a shot. See
 `docs/superpowers/specs/2026-08-23-agent-layer-design.md`,
 `docs/superpowers/plans/2026-08-23-agent-layer.md`,
-`docs/superpowers/specs/2026-08-28-media-agent-design.md`, and
-`docs/superpowers/plans/2026-08-28-media-agent.md` for the design and implementation
-history.
+`docs/superpowers/specs/2026-08-28-media-agent-design.md`,
+`docs/superpowers/plans/2026-08-28-media-agent.md`,
+`docs/superpowers/specs/2026-08-30-environment-locking-design.md`, and
+`docs/superpowers/plans/2026-08-30-environment-locking.md` for the design and
+implementation history.
 
 **To use it:** the `/ai-film-setup` and `/create-film` commands and their four
 agents live in this repo's own `.claude/commands/` and `.claude/agents/` — Claude
