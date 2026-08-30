@@ -48,6 +48,7 @@ Do not write any file yet. Converge on, across as many `NEEDS_INPUT`/`HUMAN_RESP
 
 - Genre and tone
 - Main character(s) — name, role, one line of personality each
+- The location(s) the story's scenes take place in — named consistently, since these become locked, reusable environments (see Step 4); the same place mentioned in two different scenes must use the exact same name
 - A style reference (visual/tonal touchstone — a film, art style, or mood)
 - The core conflict or arc
 
@@ -73,12 +74,14 @@ Character names must not contain commas (the dispatching command later splits a 
 
 ## Step 3: Propose the scene breakdown
 
-Do NOT write any `02_scenes/*.md` files yet. First propose a list of scenes as just titles and one-line summaries, e.g.:
+Do NOT write any `02_scenes/*.md` files yet. First propose a list of scenes as titles, one-line summaries, and each scene's single location, e.g.:
 
 ```
-1. The Corridor — a lone engineer approaches a sealed door, tension building
-2. The Reveal — she opens it; what's inside recontextualizes the story so far
+1. The Corridor — a lone engineer approaches a sealed door, tension building — Location: hospital_corridor
+2. The Reveal — she opens it; what's inside recontextualizes the story so far — Location: server_vault
 ```
+
+Every scene has exactly one location — no exceptions. If the user describes a scene where the action moves from one place to another (e.g. "she walks down the corridor and into the server room"), that's two scenes, not one: split it here rather than proposing a single scene whose location changes partway through.
 
 Then emit a `NEEDS_INPUT` with `type: confirmation`, `id: scene_approval`, asking the user to approve this breakdown or say what to change. This is a real approval gate, not a formality — do not write scene files before a `HUMAN_RESPONSE` that actually approves it. If the answer requests changes, revise the breakdown and emit a new `NEEDS_INPUT` (`type: confirmation`, a fresh `id` such as `scene_approval_2`) — repeat until approved.
 
@@ -91,6 +94,8 @@ Once approved, write one file per scene at `02_scenes/SC<NN>.md`, where `<NN>` i
 
 **Characters:** <comma-separated character names, matching the names used in story.md exactly>
 
+**Location:** <one location name, lowercase with underscores, e.g. hospital_corridor>
+
 **Action:** <a paragraph describing what happens visually — this is what
 the Storyboard agent will later break into camera shots>
 
@@ -99,14 +104,15 @@ the Storyboard agent will later break into camera shots>
 <character name>: "<line>"
 ```
 
-If a scene has no dialogue, omit the **Dialogue:** section entirely rather than leaving it empty. Character names in **Characters:** and in dialogue lines must match exactly (case-sensitive) across every scene, and must not contain commas — this is how the dispatching command finds the unique character list; a name spelled two ways (or containing a comma) creates two characters or a malformed list by mistake.
+If a scene has no dialogue, omit the **Dialogue:** section entirely rather than leaving it empty. Character names in **Characters:** and in dialogue lines must match exactly (case-sensitive) across every scene, and must not contain commas — this is how the dispatching command finds the unique character list; a name spelled two ways (or containing a comma) creates two characters or a malformed list by mistake. The same exact-match requirement applies to **Location:** names — every scene set in the same place must use the identical slug (this is how the dispatching command finds the unique location list, and how the Storyboard agent later locates the right locked reference image); wording it two different ways ("corridor" vs. "hospital_corridor") creates two separate locations by mistake.
 
 ## When you're done
 
-Once every scene file is written, your final message is a genuine completion, not a `NEEDS_INPUT` — report confirmation that `00_story/story.md` and every `02_scenes/SC*.md` file are written, plus the exact, de-duplicated list of character names found across every scene's **Characters:** line (this list is what the dispatching command uses to know which Character agents to run next). Use this exact format for the last line of your report so it's easy to parse:
+Once every scene file is written, your final message is a genuine completion, not a `NEEDS_INPUT` — report confirmation that `00_story/story.md` and every `02_scenes/SC*.md` file are written, plus the exact, de-duplicated list of character names found across every scene's **Characters:** line, and the exact, de-duplicated list of location names found across every scene's **Location:** line (these lists are what the dispatching command uses to know which Character and Environment agents to run next). Use this exact format for the last two lines of your report so they're easy to parse:
 
 ```
 CHARACTERS: <name1>, <name2>, <name3>
+LOCATIONS: <name1>, <name2>, <name3>
 ```
 
-If the story has no named characters at all, still emit this line with an empty list: `CHARACTERS:` (nothing after the colon).
+If the story has no named characters at all, still emit that line with an empty list: `CHARACTERS:` (nothing after the colon). Likewise, if somehow no scene names a location, still emit `LOCATIONS:` with nothing after the colon.
