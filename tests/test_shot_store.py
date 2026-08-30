@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_film.shot_store import compute_status, load_shot, save_shot
+from ai_film.shot_store import compute_status, load_shot, previous_shot_id, previous_shot_image_reference, save_shot
 
 
 def _base_shot(**overrides) -> dict:
@@ -88,3 +88,37 @@ def test_list_shot_paths_excludes_feedback_files(tmp_path: Path):
     (shots_dir / "S01_SH02.json").write_text("{}")
     paths = list_shot_paths(shots_dir)
     assert [p.name for p in paths] == ["S01_SH01.json", "S01_SH02.json"]
+
+
+def test_previous_shot_id_is_none_for_a_scenes_first_shot():
+    assert previous_shot_id("S01_SH01") is None
+
+
+def test_previous_shot_id_returns_prior_shot_in_same_scene():
+    assert previous_shot_id("S01_SH02") == "S01_SH01"
+    assert previous_shot_id("S02_SH10") == "S02_SH09"
+
+
+def test_previous_shot_image_reference_none_when_predecessor_file_missing(tmp_path: Path):
+    (tmp_path / "03_shots").mkdir()
+    assert previous_shot_image_reference(tmp_path, "S01_SH02") is None
+
+
+def test_previous_shot_image_reference_none_for_scenes_first_shot(tmp_path: Path):
+    assert previous_shot_image_reference(tmp_path, "S01_SH01") is None
+
+
+def test_previous_shot_image_reference_none_when_predecessor_has_no_artifact(tmp_path: Path):
+    save_shot(tmp_path / "03_shots" / "S01_SH01.json", _base_shot())
+    assert previous_shot_image_reference(tmp_path, "S01_SH02") is None
+
+
+def test_previous_shot_image_reference_returns_locked_artifact_path(tmp_path: Path):
+    shot = _base_shot()
+    shot["generation"]["image"] = {
+        "status": "completed",
+        "attempts": 1,
+        "artifact": {"path": "04_storyboard/S01_SH01.png", "size_bytes": 10, "sha256": None},
+    }
+    save_shot(tmp_path / "03_shots" / "S01_SH01.json", shot)
+    assert previous_shot_image_reference(tmp_path, "S01_SH02") == "04_storyboard/S01_SH01.png"
