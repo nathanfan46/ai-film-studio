@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from ai_film.schema import validate_shot
+
+_SHOT_ID_RE = re.compile(r"^(S\d+)_SH(\d+)$")
 
 REQUIRED_STAGES = ("image", "video", "voice", "sfx", "music")
 _ACTIVE = ("queued", "running")
@@ -49,8 +52,13 @@ def save_shot(path: Path, shot: dict) -> None:
 
 def previous_shot_id(shot_id: str) -> str | None:
     """The immediately preceding shot id in the same scene, or None if
-    shot_id is already a scene's first shot."""
-    scene, num_str = shot_id.split("_SH")
+    shot_id is already a scene's first shot (or shot_id doesn't follow
+    the `S<SS>_SH<NN>` convention at all — treated as no predecessor,
+    not an error, since the schema doesn't constrain `id`'s format)."""
+    match = _SHOT_ID_RE.match(shot_id)
+    if match is None:
+        return None
+    scene, num_str = match.groups()
     num = int(num_str)
     return f"{scene}_SH{num - 1:02d}" if num > 1 else None
 
@@ -67,4 +75,4 @@ def previous_shot_image_reference(project_dir: Path, shot_id: str) -> str | None
         return None
     prev_shot = load_shot(prev_path)
     artifact = prev_shot.get("generation", {}).get("image", {}).get("artifact")
-    return artifact["path"] if artifact else None
+    return artifact.get("path") if artifact else None

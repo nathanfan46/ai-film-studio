@@ -131,7 +131,7 @@ def _run_generation(shot_id: str, stage_name: str, run_fn) -> None:
 
 def _character_and_environment_references(path: Path, shot_data: dict) -> list[str]:
     references = []
-    if shot_data.get("environment", {}).get("reference"):
+    if (shot_data.get("environment") or {}).get("reference"):
         references.append(str(path / shot_data["environment"]["reference"]))
     references += [
         str(path / c["reference"]) for c in shot_data.get("characters", []) if c.get("reference")
@@ -139,12 +139,14 @@ def _character_and_environment_references(path: Path, shot_data: dict) -> list[s
     return references
 
 
-def _image_references(path: Path, shot_id: str, shot_data: dict) -> list[str]:
+def _image_references(
+    path: Path, shot_id: str, shot_data: dict, quiet: bool = False
+) -> list[str]:
     references = _character_and_environment_references(path, shot_data)
     prev_ref = previous_shot_image_reference(path, shot_id)
     if prev_ref:
         references.append(str(path / prev_ref))
-    elif previous_shot_id(shot_id) is not None:
+    elif previous_shot_id(shot_id) is not None and not quiet:
         typer.echo(
             f"note: {shot_id}'s predecessor in this scene has no locked image yet — "
             f"generating without a continuity anchor",
@@ -422,7 +424,7 @@ def _build_stage_call(path: Path, shot_id: str, stage: str, force: bool):
     provider = resolve_provider(capability, stage_config["provider"])
 
     if stage == "image":
-        references = _image_references(path, shot_id, shot_data)
+        references = _image_references(path, shot_id, shot_data, quiet=True)
         return lambda: service_fn(
             project_dir=path, shot_path=shot_path, provider=provider,
             prompt=build_image_prompt(shot_data), model=stage_config["model"],

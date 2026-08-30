@@ -99,6 +99,12 @@ def test_previous_shot_id_returns_prior_shot_in_same_scene():
     assert previous_shot_id("S02_SH10") == "S02_SH09"
 
 
+def test_previous_shot_id_returns_none_for_non_conforming_id():
+    assert previous_shot_id("opening") is None
+    assert previous_shot_id("S01_SHOT_SH02") is None
+    assert previous_shot_id("S01_SHxx") is None
+
+
 def test_previous_shot_image_reference_none_when_predecessor_file_missing(tmp_path: Path):
     (tmp_path / "03_shots").mkdir()
     assert previous_shot_image_reference(tmp_path, "S01_SH02") is None

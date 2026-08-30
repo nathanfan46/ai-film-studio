@@ -413,6 +413,22 @@ def test_generate_all_image_includes_environment_reference(tmp_path: Path, monke
     ]
 
 
+def test_generate_all_image_suppresses_missing_predecessor_note(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)  # writes S01_SH01, no locked image
+    save_shot(project_dir / "03_shots" / "S01_SH02.json", _shot("S01_SH02"))
+    # approve-generation --scope storyboard replaces any prior approval wholesale
+    # (not additively — see ai-film-media.md's "Note on approval scope"), so both
+    # shot ids must be approved in a single call, not two separate _approve() calls.
+    _approve(project_dir, "S01_SH01,S01_SH02")
+
+    provider = _RecordingImageProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-all", "--stage", "image", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert "predecessor" not in result.output
+
+
 class _RecordingVideoProvider:
     def __init__(self):
         self.requests = []

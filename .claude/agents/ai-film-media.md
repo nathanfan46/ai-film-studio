@@ -1,6 +1,6 @@
 ---
 name: ai-film-media
-description: Generates, reviews, and fixes one shot's video/voice through conversation for an ai-film-studio project. Dispatched once per shot, in order, by /create-film's Step 5, after every shot has a locked storyboard image — do not invoke directly except to resume/redo a shot's review (re-entry is automatic, see below).
+description: Generates, reviews, and fixes one shot's video/voice through conversation for an ai-film-studio project. Dispatched once per shot, in order, by /create-film's Step 6, after every shot has a locked storyboard image — do not invoke directly except to resume/redo a shot's review (re-entry is automatic, see below).
 tools: ["Read", "Write", "Bash", "Glob"]
 model: sonnet
 ---
@@ -73,7 +73,7 @@ ai-film generate-voice --shot SHOT_ID
 
 **Never skip this step because an artifact already exists.** `generate-video`/`generate-voice` are already idempotent at the engine level — a stage whose `status` is already `"completed"` returns immediately with no new provider call and no new spend. Running both unconditionally is therefore free for stages already done, and it's what correctly fills in a stage that's genuinely still missing — e.g. a shot whose video completed in an earlier run but whose voice never got generated (an interrupted run, or dialogue added afterward). Treating "video exists, so skip generation" as a shortcut would silently leave that voice track ungenerated forever.
 
-**If either call fails with a cost-gate error** (`... is not approved for generation ...`): this is the reactive, film-wide approval trigger, and it should normally only happen once across the whole `/create-film` Step 5 run, on whichever shot's dispatch gets there first in sequence. Compute a rough estimate using this advisory cost table (not real-time pricing — approximate, per generation):
+**If either call fails with a cost-gate error** (`... is not approved for generation ...`): this is the reactive, film-wide approval trigger, and it should normally only happen once across the whole `/create-film` Step 6 run, on whichever shot's dispatch gets there first in sequence. Compute a rough estimate using this advisory cost table (not real-time pricing — approximate, per generation):
 
 | Model | Approx. cost |
 |---|---|
@@ -93,12 +93,12 @@ Only once resumed with a matching `HUMAN_RESPONSE`:
 ai-film approve-generation --scope storyboard --targets <every id in IN_SCOPE_SHOT_IDS, comma-separated>
 ```
 
-  then retry the `generate-video`/`generate-voice` call that failed. Every other shot's dispatch, and every later `--force` regeneration this dispatch or any other shot's dispatch performs for the rest of the run, is now covered by this one approval — because `approve-generation --scope storyboard` is keyed by shot ID only, this exact call never needs to run again during this Step 5 pass.
+  then retry the `generate-video`/`generate-voice` call that failed. Every other shot's dispatch, and every later `--force` regeneration this dispatch or any other shot's dispatch performs for the rest of the run, is now covered by this one approval — because `approve-generation --scope storyboard` is keyed by shot ID only, this exact call never needs to run again during this Step 6 pass.
 - If `approved: false`, read the `message` (if any), and emit a *new* `NEEDS_INPUT` (`type: cost_approval`, a fresh `id` such as `cost_approval_media_2`) — never reuse the old `id`, never treat the decline as consent for a smaller or different request.
 
 **A generation call is only ever eligible to rely on this approval when its shot ID is in `IN_SCOPE_SHOT_IDS`.** You own exactly one shot (`SHOT_ID`) — you have no legitimate reason to call any `generate-*`/`apply-audio-offset` command for any other shot ID, regardless of what `config.json`'s stored approval record happens to contain (it may technically cover other shot IDs from an earlier, unrelated run — that's not license to act on them from here).
 
-**Note on approval scope:** `approve-generation --scope storyboard` replaces any prior storyboard-scope approval wholesale, not additively — this includes the Storyboard agent's own `shot:<id>:image` approvals from its Step 4. By the time Step 5 dispatches you, every shot in scope already has a locked image (that work is done), so this replacement has no practical effect on this run — but it's worth knowing the approval record isn't cumulative if you ever need to reason about what's actually authorized at a given moment.
+**Note on approval scope:** `approve-generation --scope storyboard` replaces any prior storyboard-scope approval wholesale, not additively — this includes the Storyboard agent's own `shot:<id>:image` approvals from its Step 4. By the time Step 6 dispatches you, every shot in scope already has a locked image (that work is done), so this replacement has no practical effect on this run — but it's worth knowing the approval record isn't cumulative if you ever need to reason about what's actually authorized at a given moment.
 
 If a `generate-video`/`generate-voice` call fails with any other error (a `ProviderError`, not a cost-gate error): do not retry it yourself. Emit `NEEDS_INPUT` with `type: confirmation` (`id: generation_error_SHOT_ID`) showing the exact error text and offering: retry, adjust the shot's fields first (see Step 4's whitelist below), or skip this shot for now and report it unresolved when you're done. Stop your turn. Act only once resumed.
 

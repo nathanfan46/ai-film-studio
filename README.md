@@ -221,6 +221,12 @@ records each one.
   or `generate-candidates`/`edit-candidate` command indefinitely.
 - **Candidates are image-only.** Video/audio candidate review and a whole-film preview
   aren't built yet — see Roadmap below.
+- **`generate-all --stage image` doesn't chain same-scene continuity.**
+  Every shot's reference list is built before any shot generates, so the
+  same-scene previous-shot-image chaining that `generate-image`/
+  `generate-candidates` apply when run per shot in scene order doesn't
+  apply in batch mode. Use per-shot generation in scene order if
+  continuity chaining across a batch matters.
 
 These are documented gaps from this project's own final reviews, not surprises you'll
 discover — see `docs/superpowers/plans/2026-08-18-ai-film-studio-core-engine.md` and
@@ -250,7 +256,7 @@ sfx/music generate only when you explicitly ask for them on a shot. See
 `docs/superpowers/plans/2026-08-30-environment-locking.md` for the design and
 implementation history.
 
-**To use it:** the `/ai-film-setup` and `/create-film` commands and their four
+**To use it:** the `/ai-film-setup` and `/create-film` commands and their five
 agents live in this repo's own `.claude/commands/` and `.claude/agents/` — Claude
 Code only discovers project-local commands/agents when you run `claude` from a
 directory whose `.claude/` contains them. Run `claude` from this repo checkout to
@@ -259,7 +265,7 @@ use them (the film project itself doesn't have to live here — `/create-film "T
 title>` inside wherever you ran `claude` from). To use these commands from a
 different working directory or a separate film-only repo, copy or symlink
 `.claude/commands/ai-film-setup.md`, `.claude/commands/create-film.md`, and the
-four files under `.claude/agents/` into that directory's own `.claude/` (or into
+five files under `.claude/agents/` into that directory's own `.claude/` (or into
 `~/.claude/commands/` and `~/.claude/agents/` to make them available everywhere).
 
 Per those specs' Future Extensions: a dedicated Continuity agent if shot volume ever
