@@ -47,7 +47,7 @@ Only act on a `HUMAN_RESPONSE` whose `id` matches the question you actually aske
 
 ## Step 0: Load context
 
-Read every `02_scenes/*.md` file (Glob for them, in `SC<NN>` order) and every `01_bibles/characters/*.md` file. For each character mentioned in any scene, confirm `assets/characters/<name>/reference.png` exists — if any is missing, stop and report which character(s) still need the Character agent run first; do not proceed with an unlocked character. This is a normal completion report, not a `NEEDS_INPUT` (there's no question to ask — the Character agent needs to run first, which is the orchestrator's job to arrange).
+Read every `02_scenes/*.md` file (Glob for them, in `SC<NN>` order) and every `01_bibles/characters/*.md` and `01_bibles/environments/*.md` file. For each character mentioned in any scene, confirm `assets/characters/<name>/reference.png` exists; for each scene's `**Location:**` name, confirm `assets/environments/<name>/reference.png` exists — if any character or location reference is missing, stop and report which character(s)/location(s) still need the Character/Environment agent run first; do not proceed with an unlocked character or location. This is a normal completion report, not a `NEEDS_INPUT` (there's no question to ask — the Character/Environment agent needs to run first, which is the orchestrator's job to arrange).
 
 ## Step 1: Check for existing work (re-entry)
 
@@ -70,6 +70,7 @@ Write one file per shot at `03_shots/S<SS>_SH<NN>.json` (`<SS>` = 2-digit scene 
   "visual": {"style": "<from story.md's tone, kept consistent across every shot>", "lighting": "<specific to this shot>"},
   "camera": {"shot": "<wide|medium|close-up|extreme-close-up>", "movement": "<static|slow_push_in|pan|handheld|...>"},
   "dialogue": {"text": "<line, or empty string if none>", "speaker": "<character name, or empty string if none>"},
+  "environment": {"name": "<scene's Location name>", "reference": "assets/environments/<scene's Location name>/reference.png"},
   "characters": [
     {"name": "<character name>", "reference": "assets/characters/<character name>/reference.png"}
   ],
@@ -83,7 +84,7 @@ Write one file per shot at `03_shots/S<SS>_SH<NN>.json` (`<SS>` = 2-digit scene 
 }
 ```
 
-`id` must match the filename stem exactly. `characters` lists every character appearing in that shot (omit `characters` entries for anyone not visible/relevant to that specific shot, even if they're in the scene). Set `dialogue.speaker`/`dialogue.text` to `""` when the shot has no line. `generation.voice`/`sfx`/`music` stay `"not_required"` unless you have a specific reason to mark voice `"pending"` for a shot with dialogue — even then, leave that to a human decision later; don't change these three away from `"not_required"` in this agent.
+`id` must match the filename stem exactly. `environment` is copied verbatim from the scene's `**Location:**` line — every shot in a scene gets the exact same `environment.name`/`environment.reference`, with no exception and no per-shot override; this is not a judgment call the way narrowing `characters` down to who's visible in one shot is (see below) — a scene has exactly one location, period. `characters` lists every character appearing in that shot (omit `characters` entries for anyone not visible/relevant to that specific shot, even if they're in the scene). Set `dialogue.speaker`/`dialogue.text` to `""` when the shot has no line. `generation.voice`/`sfx`/`music` stay `"not_required"` unless you have a specific reason to mark voice `"pending"` for a shot with dialogue — even then, leave that to a human decision later; don't change these three away from `"not_required"` in this agent.
 
 After writing a scene's shot files, run `ai-film validate` and fix anything it reports before moving on.
 
@@ -109,7 +110,7 @@ Batch shots by scene (or a larger batch if the user prefers) rather than one app
 
 look up `PROJECT_PATH/config.json`'s `providers.image.model`, decide a candidate count per shot (default 4, same as the Character agent), and compute the estimated total for the batch (shots × candidates × cost/image). Emit a `NEEDS_INPUT` with `type: cost_approval` (`id: cost_approval_<batch-description>`, e.g. `cost_approval_scene1`) asking the user to approve that spend — and **stop your turn there**. Do not run `approve-generation` in this same turn.
 
-**Note on the real `fal` provider:** if `providers.image.provider` is `fal` (not `mock`), be aware that `characters[].reference` conditioning doesn't work against the real API yet — the fal providers send local file paths where the API expects uploaded URLs, and an upload step hasn't been implemented (see the project README's Known Limitations). `edit-candidate` in Step 5 is affected the same way: fal *does* support true image edits at the API level (unlike `mock`, which always falls back to a fresh regeneration with the instruction merged into the prompt), but the edit call also submits the base image as a local path, so it's subject to the same unimplemented-upload gap — don't assume it edits the base image faithfully under `fal` until that gap is closed. None of this is something you can fix here. Mention it to the user only if it seems relevant (e.g. they expect edits to preserve the base composition exactly, or expect the character's locked reference image to visibly influence the shot).
+**Note on the real `fal` provider:** `characters[].reference` and `environment.reference` conditioning both work against the real API — the fal providers upload each local reference file and send fal the resulting URL. `edit-candidate` in Step 5 also genuinely edits the base image under `fal` (unlike `mock`, which always falls back to a fresh regeneration with the instruction merged into the prompt) — the base image is uploaded the same way. Nothing to warn the user about here beyond normal generation variance.
 
 Only once you've been resumed with a matching `HUMAN_RESPONSE`:
 
@@ -126,7 +127,9 @@ then continue to Step 5 for this batch.
 
 ## Step 5: Generate, review, and lock each shot's image
 
-For each shot in the approved batch:
+**Process shots within each scene in strictly increasing shot-number order — never skip ahead to a later shot before an earlier one in the same scene is locked.** Each shot's storyboard-candidate generation chains from its immediately preceding shot's locked image within the same scene (the engine does this automatically once that predecessor is locked). Generating out of order silently starves a later shot of that continuity anchor. If a batch spans multiple scenes, the order across scenes doesn't matter — only the order *within* each scene does.
+
+For each shot in the approved batch, in that order:
 
 1. Generate candidates — no `--prompt` needed, it's derived automatically from the shot's `action`/`visual`/`camera` fields:
 
