@@ -22,6 +22,15 @@ def test_valid_shot_has_no_errors():
     assert validate_shot(_valid_shot()) == []
 
 
+def test_shot_with_environment_field_is_valid():
+    shot = _valid_shot()
+    shot["environment"] = {
+        "name": "hospital_corridor",
+        "reference": "assets/environments/hospital_corridor/reference.png",
+    }
+    assert validate_shot(shot) == []
+
+
 def test_missing_required_field_is_reported():
     shot = _valid_shot()
     del shot["schema_version"]

@@ -35,6 +35,13 @@ SHOT_SCHEMA = {
         "status": {"enum": ["draft", "ready", "generating", "completed", "failed"]},
         "duration_seconds": {"type": "number"},
         "characters": {"type": "array"},
+        "environment": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "reference": {"type": "string"},
+            },
+        },
         "inputs": {"type": "object"},
         "camera": {"type": "object"},
         "action": {"type": "string"},
