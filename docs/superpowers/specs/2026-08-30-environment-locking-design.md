@@ -19,6 +19,22 @@ This spec gives locations the same treatment characters already get — a named,
 
 Read directly from the provider code: **image generation sends every reference path** (`providers/fal/image.py`: `input_data["image_urls"] = [client.upload_file(p) for p in request.reference_paths]`), but **video generation sends only `reference_paths[0]`** (`providers/fal/video.py`: `input_data["image_url"] = client.upload_file(request.reference_paths[0])`) — a single image, not a list. This is pre-existing behavior, not something this spec introduces: today, a two-character shot already silently drops its second character's reference for video generation, because the list built for the multi-image case gets reused as-is for the single-slot case. Naively appending an environment reference to the end of that same list would make it invisible to video generation the same way. §4.3 designs around this directly instead of ignoring it.
 
+### The continuity model this spec establishes
+
+Three distinct layers, each answering a different question, and it matters that they stay distinct:
+
+| Layer | Question it answers | Enforced by | Free to vary? |
+|---|---|---|---|
+| **Entity Lock** | Who? Where? | `characters[].reference`, `environment.reference` | No — this is what "locked" means |
+| **Shot Continuity** | What did this place look like a moment ago? | Previous locked shot image (§4.2) | No — always chained when available |
+| **Intentional Change** | What's different in *this* shot? | Camera, framing, which characters are visible, action, dialogue | Yes — this is where a scene actually moves |
+
+**Lock does not mean identical output. Lock means an identity constraint.** A locked environment doesn't require every shot in it to look pixel-similar — a wide establishing shot and a close-up on a different character can (and should) look very different in framing while still being recognizably the same room. What lock actually guarantees is narrower and non-negotiable: *which* room it is never changes without an explicit, human-approved reason.
+
+This distinction is also why reference-image conditioning alone (Entity Lock) isn't sufficient on its own, and why Shot Continuity (§4.2) is load-bearing, not decorative: an image model conditioned on "a white hospital corridor with fluorescent lighting" can satisfy that description with two visibly different corridors across two separate generations — reference conditioning constrains *concept*, not exact *space*. Chaining from the immediately preceding shot's actual locked image is what closes that gap.
+
+The hard rule this spec enforces end to end: **a shot inherits its scene's locked location by default, always. The only way a shot's location differs from its scene's is that it belongs to a *different scene* — a boundary a human already explicitly approved during the Director's scene-breakdown step (§5). No agent — Storyboard included — ever assigns a shot to a different location than its scene declares, regardless of what camera angle, action, or framing that shot needs.** Camera, shot size, composition, and which characters are in frame are all free to change shot-to-shot; location is not one of the things "creative judgment" is allowed to touch.
+
 ### Goals
 
 - A location is a named, reusable entity, like a character — the same locked location can be referenced by shots across different scenes (a story revisiting a place later reuses the same lock, not a fresh drift-prone generation).
@@ -31,7 +47,7 @@ Read directly from the provider code: **image generation sends every reference p
 ### Non-Goals
 
 - **No automatic text-injection into prompts from a stored environment description.** Matching how characters already work: the engine never auto-injects character bible text into `build_image_prompt`, appearance consistency comes entirely from reference-image conditioning, and bible text exists purely as agent-facing context for writing new shots. Environments get the identical treatment — no new prompt-assembly mechanism invented for this spec.
-- **No per-shot multi-location support.** A shot references exactly one environment, matching how `duration_seconds`/`camera` are already singular per shot. A scene spanning two rooms is two shots (or two scenes), each with its own single `environment` reference — same granularity a scene already uses for splitting camera setups.
+- **No per-shot multi-location support, and no intra-scene location transitions.** A shot references exactly one environment, and a *scene* has exactly one `**Location:**` value for every shot in it — full stop, no exceptions, no inline transition syntax. A story beat that moves from one room to another is two scenes, not one scene with a location change partway through. This is deliberate, not just simple: a scene boundary is already a point where a human explicitly approves the breakdown (the Director's existing scene-breakdown confirmation round trip) — reusing that as the *only* place a location can change means no agent downstream ever infers a location change on its own. See "The continuity model this spec establishes" above for why this invariant is hard, not a default.
 - **No engine changes to the candidate loop itself.** `env:` targets already work end-to-end; this spec only adds the pieces that were missing (a schema field to reference the lock, reference-conditioning wiring, and agent orchestration to discover/lock locations before shots are written).
 - **No change to how `reference_paths` conditions image generation's *character* references** — only how the environment reference is added alongside them, and how video's single-slot constraint is resolved (§4.3).
 
@@ -79,7 +95,7 @@ Additive to the schema (non-required, so every shot.json written before this spe
 }
 ```
 
-`name` is a slug (lowercase, underscores — same convention as character names being human-readable strings, but locations get slugged since they're also used as directory names under `assets/environments/`, and directory-safe names avoid the spaces/punctuation a location description might otherwise contain). `reference` is always the project-relative path to that environment's locked `reference.png`, populated the same way `characters[].reference` already is — written by whichever agent (here, Storyboard) assigns the shot to that location, not looked up dynamically at generation time.
+`name` is a slug (lowercase, underscores — same convention as character names being human-readable strings, but locations get slugged since they're also used as directory names under `assets/environments/`, and directory-safe names avoid the spaces/punctuation a location description might otherwise contain). `reference` is always the project-relative path to that environment's locked `reference.png`, populated the same way `characters[].reference` already is — written once, when Storyboard copies it in from the shot's scene (§5), not looked up dynamically at generation time.
 
 ### 3.2 `02_scenes/SC*.md` — new `**Location:**` line
 
@@ -95,7 +111,7 @@ Illustrative format (unchanged: nothing parses this file with a strict schema, s
 **Action:** A lone engineer walks through a dim, humming corridor...
 ```
 
-A scene's `**Location:**` line names exactly one location — matching the one-environment-per-shot Non-Goal, a scene's default is inherited by every shot in it unless the Storyboard agent's own judgment (same judgment it already applies to whittle a scene's `**Characters:**` list down to who's actually visible per shot) decides a specific shot needs a different one.
+A scene's `**Location:**` line names exactly one location, and it is authoritative — every shot in that scene inherits it, with no exception and no per-shot override. This is deliberately *not* the same kind of judgment call Storyboard already makes for `**Characters:**` (narrowing a scene's full cast down to who's actually visible in one specific shot is fine — characters entering/leaving frame shot-to-shot is normal blocking, not an identity change). Location has no equivalent "narrowing" — there's nothing to narrow, because a scene has exactly one location and every shot in it is in that location, period.
 
 ### 3.3 `01_bibles/environments/<name>.md` — the environment bible
 
@@ -138,15 +154,21 @@ references += [c["reference"] for c in shot_data.get("characters", []) if c.get(
 This is additive, not exclusive, deliberately: a wide establishing shot followed by a close-up on a different character is legitimately supposed to differ in framing, and forcing exact visual repetition would fight that. Adding one more reference image alongside the locked environment/character references reinforces "this is recognizably the same room, a moment later" without demanding identical composition — the same way having multiple character references today doesn't force the output to look identical to any single one of them.
 
 ```python
+def previous_shot_id(shot_id: str) -> str | None:
+    """The immediately preceding shot id in the same scene, or None if
+    shot_id is already a scene's first shot."""
+    scene, num_str = shot_id.split("_SH")
+    num = int(num_str)
+    return f"{scene}_SH{num - 1:02d}" if num > 1 else None
+
+
 def previous_shot_image_reference(project_dir: Path, shot_id: str) -> str | None:
     """The immediately preceding shot's locked storyboard image, same scene,
     if one exists and is already completed — None for a scene's first shot,
     or if the preceding shot has no locked image yet."""
-    scene, num_str = shot_id.split("_SH")
-    num = int(num_str)
-    if num <= 1:
+    prev_id = previous_shot_id(shot_id)
+    if prev_id is None:
         return None
-    prev_id = f"{scene}_SH{num - 1:02d}"
     prev_path = project_dir / "03_shots" / f"{prev_id}.json"
     if not prev_path.exists():
         return None
@@ -161,9 +183,18 @@ def previous_shot_image_reference(project_dir: Path, shot_id: str) -> str | None
 prev_ref = previous_shot_image_reference(path, shot)
 if prev_ref:
     references.append(prev_ref)
+elif previous_shot_id(shot) is not None:
+    # a predecessor exists in this scene but isn't locked yet — worth a
+    # note, unlike shot being a scene's genuine first shot (nothing missing there)
+    typer.echo(
+        f"note: {shot}'s predecessor in this scene has no locked image yet — "
+        f"generating without a continuity anchor", err=True,
+    )
 ```
 
 Order: environment, then characters (§4.1), then the previous shot's image last — anchoring identity first, continuity second. `generate-candidates`' multi-candidate output is unaffected by this ordering; it's only load-bearing for video's single-slot case (§4.3), which doesn't consume this list at all once a shot's own image is locked.
+
+**This omission is never silent.** The normal pipeline (Storyboard agent, processing a scene's shots in strict order per §5) should never actually hit this branch — it exists for out-of-order manual CLI use (a human regenerating one specific shot directly). When it does trigger, the command says so on stderr rather than quietly proceeding as if nothing were missing, so a human driving the CLI directly knows the continuity anchor was skipped and can decide whether that's acceptable or whether to lock the predecessor first.
 
 ### 4.3 Video generation: condition on the shot's own locked storyboard image, not raw reference sheets
 
@@ -203,7 +234,9 @@ Per the Non-Goals correction: no new text gets auto-assembled from environment d
 - Locks in via `select-candidate --target env:<name> --id <candidate-id>`, writing `reference.png`.
 - Same wholesale-replace caveat on the `"bibles"` approval scope already documented in `ai-film-character.md` — a non-issue as long as each Environment dispatch (like each Character dispatch) fully resolves before the next one starts, which is how `/create-film` already dispatches both.
 
-**Storyboard agent** (`ai-film-storyboard.md`, modified): when writing each shot, populates `environment: {"name": ..., "reference": "assets/environments/<name>/reference.png"}` from the shot's scene's `**Location:**` line (default) or a more specific judgment call if the scene's action clearly splits across locations — the identical judgment call already applied to narrow a scene's `**Characters:**` list down to who appears in a specific shot. Before writing any shot, confirms `assets/environments/<name>/reference.png` exists for that scene's location, the same existing-file check already performed for `assets/characters/<name>/reference.png` — if missing, stops and reports which location(s) still need the Environment agent run first (mirrors the existing character check exactly).
+**Storyboard agent** (`ai-film-storyboard.md`, modified): when writing each shot, populates `environment: {"name": ..., "reference": "assets/environments/<name>/reference.png"}` by **copying its scene's `**Location:**` line verbatim — never deciding, never overriding, never inferring an alternative based on a shot's action or camera needs.** The Director's scene-level declaration is authoritative (§1); Storyboard's job here is inheritance, not judgment. Before writing any shot, confirms `assets/environments/<name>/reference.png` exists for that scene's location, the same existing-file check already performed for `assets/characters/<name>/reference.png` — if missing, stops and reports which location(s) still need the Environment agent run first (mirrors the existing character check exactly).
+
+**Within a scene, the Storyboard agent writes and locks shots in strictly increasing shot-number order — never skipping ahead.** This isn't a suggestion: shot N+1's storyboard-candidate generation depends on shot N already having a locked image to chain from (§4.2), so generating out of order inside one agent dispatch would silently starve later shots of their continuity anchor. A single Storyboard dispatch already processes one scene's shots sequentially within its own generate→review→lock loop (§ existing Step 5) — this just makes the ordering requirement explicit rather than incidental.
 
 **Media agent** (`ai-film-media.md`): no changes to its own dispatch/protocol logic — it calls `generate-video` exactly as before; §4.3's behavior change lives entirely in the engine/CLI layer, transparent to this agent.
 
@@ -215,10 +248,12 @@ Per the Non-Goals correction: no new text gets auto-assembled from environment d
 - **Two scenes use slightly different wording for what's meant to be the same place** ("the corridor" vs. "hospital corridor"): a content/authoring concern, not an engine one — same category of risk that already exists for character names needing to match exactly across scenes (`ai-film-director.md` already documents this exact-match requirement for characters; the same requirement extends to location names here, stated in the Director agent's updated instructions).
 - **A shot needs no locked location at all** (an abstract/black-frame shot, rare but possible): `environment` stays absent from that shot's JSON, exactly like `characters[]` can already be an empty list — no special-casing needed since the field is non-required.
 - **Video generation runs before an image is locked** (out-of-order manual CLI use, not the normal pipeline path): §4.3's fallback covers this explicitly rather than erroring.
+- **A shot's predecessor in the same scene isn't locked yet when its own image candidates are generated** (only reachable via manual/out-of-order CLI use — the Storyboard agent itself never triggers this, per §5's strict-ordering rule): not an error, generation proceeds without the continuity anchor, but the command says so on stderr (§4.2) rather than silently proceeding as if the chain were intact.
+- **A human tries to make a scene span two locations** (asks the Director to put two `**Location:**` values in one scene, or to have Storyboard assign a shot a location its scene doesn't declare): refused — per the Non-Goals invariant, the only correct response is splitting into two scenes. The Director agent's scene-breakdown step is where this gets caught and redirected, before any shot exists to be wrong.
 
 ## 7. Testing Strategy
 
-Engine-level changes (schema field, `reference_paths` construction in `cli.py`, `generate_video_cmd`'s image-artifact-first conditioning, `previous_shot_image_reference`) get real `pytest` coverage, following this codebase's existing patterns (`tests/test_schema.py` for the additive field, `tests/test_cli_generation_commands.py`-style tests asserting the mock provider receives the expected `reference_paths` for: a shot with an environment set, a scene's first shot (no previous-shot reference), a later shot whose predecessor already has a locked image (previous-shot reference included, appended last), a later shot whose predecessor has no locked image yet (gracefully omitted, not an error), a shot with a locked image present at video-generation time, and the video fallback path when it's absent). Agent-file changes (Director/Environment/Storyboard/`/create-film`) get the same behavioral verification approach already established in `docs/superpowers/plans/2026-08-23-agent-layer.md` and `docs/superpowers/plans/2026-08-28-media-agent.md` — real CLI command sequences against a scratch project with the mock provider, since there is no pytest for prompt files.
+Engine-level changes (schema field, `reference_paths` construction in `cli.py`, `generate_video_cmd`'s image-artifact-first conditioning, `previous_shot_image_reference`) get real `pytest` coverage, following this codebase's existing patterns (`tests/test_schema.py` for the additive field, `tests/test_cli_generation_commands.py`-style tests asserting the mock provider receives the expected `reference_paths` for: a shot with an environment set, a scene's first shot (no previous-shot reference), a later shot whose predecessor already has a locked image (previous-shot reference included, appended last), a later shot whose predecessor has no locked image yet (omitted, not an error, but with the stderr note asserted present), a shot with a locked image present at video-generation time, and the video fallback path when it's absent). Agent-file changes (Director/Environment/Storyboard/`/create-film`) get the same behavioral verification approach already established in `docs/superpowers/plans/2026-08-23-agent-layer.md` and `docs/superpowers/plans/2026-08-28-media-agent.md` — real CLI command sequences against a scratch project with the mock provider, since there is no pytest for prompt files.
 
 ## 8. Documentation Corrections Bundled Into This Work
 
@@ -227,6 +262,7 @@ Engine-level changes (schema field, `reference_paths` construction in `cli.py`, 
 
 ## 9. Future Extensions (explicitly out of scope for this spec)
 
+- Intra-scene location transitions with explicit inline markers (e.g. a scene whose action genuinely moves from one room to another mid-scene, without the overhead of a full scene split) — deferred deliberately: the "split into two scenes" rule (Non-Goals) is simpler, reuses an already-human-approved boundary, and closes off any path for an agent to infer a location change on its own. Worth revisiting only if that rule proves too rigid in real use, not before.
 - Multi-location shots (a single shot compositing two locations) — no evidence this is needed yet; today's one-shot-per-location-per-moment granularity matches how shots are already broken down.
 - A programmatic check that flags when a scene's `**Location:**` name is suspiciously close-but-not-identical to another scene's (catching the "corridor" vs. "hospital corridor" drift risk automatically) — a real improvement, but a text-similarity heuristic is its own scoped feature, not a prerequisite for this one.
 - Extending the same "condition video on the locked image" treatment to `generate-sfx`/`generate-music` — not applicable, neither takes an image reference today.
