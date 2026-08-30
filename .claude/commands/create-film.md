@@ -1,15 +1,15 @@
 ---
-description: Start or resume a film — scaffolds the project, then runs the Director, Character, Storyboard, and Media agents in sequence through conversation.
+description: Start or resume a film — scaffolds the project, then runs the Director, Character, Environment, Storyboard, and Media agents in sequence through conversation.
 argument-hint: "\"<Title>\" [project-path]"
 ---
 
 # /create-film
 
-The single entry point for starting or resuming a film with `ai-film-studio`. Scaffolds (or resumes) a project, then walks the whole story -> character -> shot -> locked storyboard image -> reviewed video/voice pipeline through conversation, dispatching the four pipeline agents in order and relaying your answers to them per the protocol below.
+The single entry point for starting or resuming a film with `ai-film-studio`. Scaffolds (or resumes) a project, then walks the whole story -> character -> location -> shot -> locked storyboard image -> reviewed video/voice pipeline through conversation, dispatching the five pipeline agents in order and relaying your answers to them per the protocol below.
 
 ## The human-in-the-loop protocol (you are the orchestrator side of this)
 
-The `ai-film-director`, `ai-film-character`, `ai-film-storyboard`, and `ai-film-media` subagents you dispatch below have no live channel to the user themselves — only you do, since you're running in this actual conversation. Whenever one of them needs a real answer, its final report ends with, verbatim:
+The `ai-film-director`, `ai-film-character`, `ai-film-environment`, `ai-film-storyboard`, and `ai-film-media` subagents you dispatch below have no live channel to the user themselves — only you do, since you're running in this actual conversation. Whenever one of them needs a real answer, its final report ends with, verbatim:
 
 ```
 NEEDS_INPUT:
@@ -53,7 +53,7 @@ Do this before anything else; every later step needs a binary that actually work
 2. If that fails — command not found, *or* found but erroring (e.g. a stale/broken shim like `ModuleNotFoundError: No module named 'ai_film'`, which means something else on `PATH` shadowed the real one) — run `./.venv/bin/ai-film version` by itself, relative to the current working directory (this is where `claude` was launched from, which per the README is meant to be the `ai-film-studio` repo checkout itself). If that succeeds, set `AI_FILM_BIN` to the literal string `./.venv/bin/ai-film` (relative, exactly as written — do not expand it to an absolute path) and use it for every `ai-film` invocation for the rest of this run. Do not ask the user to `source .venv/bin/activate`.
 3. If neither works, check whether `./pyproject.toml` exists (confirms you're in the right repo, just not set up yet). If it does, tell the user no working `ai-film` install was found and ask whether you should set one up now (`python3 -m venv .venv` then `.venv/bin/pip install -e ".[dev]"`, matching the README's install step). If they say yes, run it, then retry step 2 above. If `./pyproject.toml` doesn't exist either, this isn't the `ai-film-studio` repo checkout at all — tell the user to run `claude` from inside it instead, and stop; there's nothing to self-heal here.
 
-From here on, every instruction in this file and in the four dispatched agents' own instructions that says `ai-film <command>` means `AI_FILM_BIN <command>` — substitute the resolved value. You don't need to pass `AI_FILM_BIN` down when dispatching the `ai-film-character`, `ai-film-storyboard`, and `ai-film-media` subagents in Steps 3-5 below — each one runs this exact same resolution independently (they inherit the same working directory you're running in, so they'll resolve the same value).
+From here on, every instruction in this file and in the five dispatched agents' own instructions that says `ai-film <command>` means `AI_FILM_BIN <command>` — substitute the resolved value. You don't need to pass `AI_FILM_BIN` down when dispatching the `ai-film-character`, `ai-film-environment`, `ai-film-storyboard`, and `ai-film-media` subagents in Steps 3-6 below — each one runs this exact same resolution independently (they inherit the same working directory you're running in, so they'll resolve the same value).
 
 This command does not itself check `FAL_KEY` or provider configuration — if the user hasn't run `/ai-film-setup` yet, mention it's available, but don't block on it here (the mock provider works with zero configuration, so a fresh project is still usable without it).
 
@@ -70,17 +70,21 @@ Check whether `PROJECT_PATH/config.json` already exists.
 
 ## Step 2: Run the Director/Story agent
 
-Dispatch the `ai-film-director` subagent with `PROJECT_PATH` as its project root. Run the protocol loop above until it reports a genuine completion. Its final completion report ends with a line `CHARACTERS: <name1>, <name2>, ...` — parse that list; these are every unique character name found across all scenes. If the list is empty (`CHARACTERS:` with nothing after the colon — a story with no named characters), skip Step 3 entirely and go straight to Step 4.
+Dispatch the `ai-film-director` subagent with `PROJECT_PATH` as its project root. Run the protocol loop above until it reports a genuine completion. Its final completion report ends with two lines, `CHARACTERS: <name1>, <name2>, ...` and `LOCATIONS: <name1>, <name2>, ...` — parse both lists; these are every unique character name and every unique location name found across all scenes. If `CHARACTERS:` is empty (nothing after the colon — a story with no named characters), skip Step 3 entirely and go to Step 4. If `LOCATIONS:` is empty, skip Step 4 entirely and go to Step 5.
 
 ## Step 3: Run the Character agent, once per unique name
 
 For each name in the parsed `CHARACTERS` list, **one at a time, in order** (never in parallel — each run's protocol loop needs your real, in-order attention): dispatch the `ai-film-character` subagent with `PROJECT_PATH` and that one character name. Run the protocol loop above until it reports a genuine completion, then move to the next name.
 
-## Step 4: Run the Storyboard/Shot Director agent
+## Step 4: Run the Environment agent, once per unique location name
 
-Once every character from Step 3 is locked (or Step 3 was skipped because there were no characters), dispatch the `ai-film-storyboard` subagent once, with `PROJECT_PATH` as its project root. It internally handles every scene and shot in one run — run the protocol loop above until it reports a genuine completion.
+For each name in the parsed `LOCATIONS` list, **one at a time, in order** (never in parallel — each run's protocol loop needs your real, in-order attention): dispatch the `ai-film-environment` subagent with `PROJECT_PATH` and that one location name. Run the protocol loop above until it reports a genuine completion, then move to the next name.
 
-## Step 5: Run the Media agent, once per shot with a locked image
+## Step 5: Run the Storyboard/Shot Director agent
+
+Once every character from Step 3 is locked (or Step 3 was skipped because there were no characters) and every location from Step 4 is locked (or Step 4 was skipped because no scene named a location), dispatch the `ai-film-storyboard` subagent once, with `PROJECT_PATH` as its project root. It internally handles every scene and shot in one run — run the protocol loop above until it reports a genuine completion.
+
+## Step 6: Run the Media agent, once per shot with a locked image
 
 Compute `IN_SCOPE_SHOT_IDS` — every shot ID under `03_shots/*.json` whose `generation.image.artifact` is not `null` (every shot the Storyboard phase locked, this run or an earlier one):
 
@@ -98,10 +102,10 @@ print(','.join(ids))
 
 (substitute the real `PROJECT_PATH` for the literal text above; this reads plain JSON with the standard library only, no `ai_film` import needed, so it works with a bare `python3` regardless of which form `AI_FILM_BIN` resolved to in Step 0). This list is fixed **once**, before dispatching the first shot below — do not recompute it partway through this step, even if a later shot's dispatch changes what's on disk.
 
-If the list is empty (no shot has a locked image yet — shouldn't happen after Step 4 completes normally, but possible if Step 4 was skipped or every shot failed continuity), skip this step entirely and go to Step 6.
+If the list is empty (no shot has a locked image yet — shouldn't happen after Step 5 completes normally, but possible if Step 5 was skipped or every shot failed continuity), skip this step entirely and go to Step 7.
 
 For each shot ID in that list, **one at a time, in order** (never in parallel — each run's protocol loop needs your real, in-order attention): dispatch the `ai-film-media` subagent with `PROJECT_PATH`, that one shot ID, and the complete `IN_SCOPE_SHOT_IDS` list. Run the protocol loop above until it reports a genuine completion, then move to the next shot ID.
 
-## Step 6: Wrap up
+## Step 7: Wrap up
 
 After every shot's Media agent run reports completion, show the user a summary (how many shots were reviewed and confirmed, any left with open feedback because the human asked to pause) and remind them that `/ai-film-setup` can be re-run anytime to change providers, and that `render` is the one remaining manual step, run directly via the `ai-film` CLI, same as documented in the project's README.
