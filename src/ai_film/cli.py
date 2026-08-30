@@ -153,6 +153,13 @@ def _image_references(path: Path, shot_id: str, shot_data: dict) -> list[str]:
     return references
 
 
+def _video_references(path: Path, shot_data: dict) -> list[str]:
+    image_artifact = shot_data.get("generation", {}).get("image", {}).get("artifact")
+    if image_artifact and image_artifact.get("path"):
+        return [str(path / image_artifact["path"])]
+    return _character_and_environment_references(path, shot_data)
+
+
 @app.command(name="generate-image")
 def generate_image_cmd(
     shot: str = typer.Option(..., "--shot"),
@@ -186,9 +193,7 @@ def generate_video_cmd(
     stage_config, gen_config = _stage_config(path, "video")
     shot_path = path / "03_shots" / f"{shot}.json"
     shot_data = load_shot(shot_path)
-    references = [
-        str(path / c["reference"]) for c in shot_data.get("characters", []) if c.get("reference")
-    ]
+    references = _video_references(path, shot_data)
 
     def _run():
         provider = resolve_provider(Capability.VIDEO, stage_config["provider"])
@@ -426,9 +431,7 @@ def _build_stage_call(path: Path, shot_id: str, stage: str, force: bool):
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
         )
     if stage == "video":
-        references = [
-            str(path / c["reference"]) for c in shot_data.get("characters", []) if c.get("reference")
-        ]
+        references = _video_references(path, shot_data)
         return lambda: service_fn(
             project_dir=path, shot_path=shot_path, provider=provider,
             prompt=build_video_prompt(shot_data), model=stage_config["model"],

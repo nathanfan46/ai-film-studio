@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 
 from ai_film.cli import app
 from ai_film.shot_store import load_shot, save_shot
-from ai_film.models import Capability, GenerationJob, ImageGenerationResult, JobStatus
+from ai_film.models import Capability, GenerationJob, ImageGenerationResult, JobStatus, VideoGenerationResult
 
 runner = CliRunner()
 
@@ -411,3 +411,82 @@ def test_generate_all_image_includes_environment_reference(tmp_path: Path, monke
     assert provider.requests[-1].reference_paths == [
         str(project_dir / "assets/environments/hospital_corridor/reference.png")
     ]
+
+
+class _RecordingVideoProvider:
+    def __init__(self):
+        self.requests = []
+
+    def submit(self, request):
+        self.requests.append(request)
+        return GenerationJob(provider="mock", id=f"job{len(self.requests)}", capability=Capability.VIDEO)
+
+    def poll(self, job):
+        return JobStatus.COMPLETED
+
+    def get_result(self, job):
+        request = self.requests[-1]
+        return VideoGenerationResult(artifact_path=request.output_path, size_bytes=1, duration_seconds=2.0)
+
+
+def test_generate_video_uses_locked_image_over_raw_references(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["environment"] = {
+        "name": "hospital_corridor",
+        "reference": "assets/environments/hospital_corridor/reference.png",
+    }
+    shot["characters"] = [{"name": "Mara", "reference": "assets/characters/Mara/reference.png"}]
+    shot["generation"]["image"] = {
+        "status": "completed",
+        "attempts": 1,
+        "artifact": {"path": "04_storyboard/S01_SH01.png", "size_bytes": 10, "sha256": None},
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _approve(project_dir)
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-video", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].reference_paths == [str(project_dir / "04_storyboard" / "S01_SH01.png")]
+
+
+def test_generate_video_falls_back_to_raw_references_without_locked_image(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["environment"] = {
+        "name": "hospital_corridor",
+        "reference": "assets/environments/hospital_corridor/reference.png",
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _approve(project_dir)
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-video", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].reference_paths == [
+        str(project_dir / "assets/environments/hospital_corridor/reference.png")
+    ]
+
+
+def test_generate_all_video_uses_locked_image(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["generation"]["image"] = {
+        "status": "completed",
+        "attempts": 1,
+        "artifact": {"path": "04_storyboard/S01_SH01.png", "size_bytes": 10, "sha256": None},
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _approve(project_dir)
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-all", "--stage", "video", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].reference_paths == [str(project_dir / "04_storyboard" / "S01_SH01.png")]
