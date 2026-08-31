@@ -28,6 +28,7 @@ from ai_film.services.candidate_service import (
 )
 from ai_film.services.generation_service import (
     generate_image as generate_image_service,
+    generate_lipsync as generate_lipsync_service,
     generate_music as generate_music_service,
     generate_sfx as generate_sfx_service,
     generate_video as generate_video_service,
@@ -210,6 +211,24 @@ def generate_image_cmd(
     _run_generation(shot, "image", _run)
 
 
+def _video_duration(shot_data: dict) -> float:
+    """The target video length: for a shot with dialogue whose voice is
+    already generated, this is the voice's own measured duration — so video
+    and voice end up the same length by construction instead of drifting
+    apart (video sized off the shot's static duration_seconds, voice sized
+    off however long the TTS naturally takes for the text, with nothing
+    ever reconciling the two). Falls back to the shot's static
+    duration_seconds, unchanged from today, whenever there's no dialogue or
+    the voice hasn't been generated yet."""
+    dialogue_text = shot_data.get("dialogue", {}).get("text", "")
+    voice = shot_data.get("generation", {}).get("voice", {})
+    if dialogue_text and voice.get("status") == "completed":
+        voice_duration = (voice.get("artifact") or {}).get("duration_seconds")
+        if voice_duration:
+            return voice_duration
+    return shot_data["duration_seconds"]
+
+
 @app.command(name="generate-video")
 def generate_video_cmd(
     shot: str = typer.Option(..., "--shot"),
@@ -226,13 +245,49 @@ def generate_video_cmd(
         return generate_video_service(
             project_dir=path, shot_path=shot_path, provider=provider,
             prompt=build_video_prompt(shot_data), model=stage_config["model"],
-            reference_paths=references, duration_seconds=shot_data["duration_seconds"],
+            reference_paths=references, duration_seconds=_video_duration(shot_data),
             output_path=path / "05_video" / f"{shot}.mp4",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
         )
 
     _run_generation(shot, "video", _run)
+
+
+@app.command(name="generate-lipsync")
+def generate_lipsync_cmd(
+    shot: str = typer.Option(..., "--shot"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+) -> None:
+    """Run an audio-driven lip-sync pass over an already-locked video and
+    voice, superseding the video artifact with the synced result (same
+    version/history bookkeeping as any other video regeneration)."""
+    stage_config, gen_config = _stage_config(path, "lipsync")
+    shot_path = path / "03_shots" / f"{shot}.json"
+    shot_data = load_shot(shot_path)
+    video_artifact = shot_data.get("generation", {}).get("video", {}).get("artifact")
+    voice_artifact = shot_data.get("generation", {}).get("voice", {}).get("artifact")
+    if not video_artifact or not video_artifact.get("path"):
+        typer.echo(f"{shot}: video must be generated before lipsync", err=True)
+        raise typer.Exit(code=1)
+    if not voice_artifact or not voice_artifact.get("path"):
+        typer.echo(f"{shot}: voice must be generated before lipsync", err=True)
+        raise typer.Exit(code=1)
+
+    def _run():
+        provider = resolve_provider(Capability.LIPSYNC, stage_config["provider"])
+        return generate_lipsync_service(
+            project_dir=path, shot_path=shot_path, provider=provider,
+            video_path=str(path / video_artifact["path"]),
+            audio_path=str(path / voice_artifact["path"]),
+            model=stage_config["model"],
+            duration_seconds=video_artifact.get("duration_seconds") or shot_data["duration_seconds"],
+            output_path=path / "05_video" / f"{shot}.mp4",
+            provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
+            poll_interval_seconds=gen_config["poll_interval_seconds"],
+        )
+
+    _run_generation(shot, "lipsync", _run)
 
 
 @app.command(name="generate-voice")
@@ -462,7 +517,7 @@ def _build_stage_call(path: Path, shot_id: str, stage: str, force: bool):
         return lambda: service_fn(
             project_dir=path, shot_path=shot_path, provider=provider,
             prompt=build_video_prompt(shot_data), model=stage_config["model"],
-            reference_paths=references, duration_seconds=shot_data["duration_seconds"],
+            reference_paths=references, duration_seconds=_video_duration(shot_data),
             output_path=path / "05_video" / f"{shot_id}.mp4",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,

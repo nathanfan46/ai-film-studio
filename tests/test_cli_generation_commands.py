@@ -506,3 +506,150 @@ def test_generate_all_video_uses_locked_image(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["generate-all", "--stage", "video", "--path", str(project_dir)])
     assert result.exit_code == 0, result.output
     assert provider.requests[-1].reference_paths == [str(project_dir / "04_storyboard" / "S01_SH01.png")]
+
+
+def test_generate_video_uses_voice_duration_for_a_dialogue_shot_with_completed_voice(
+    tmp_path: Path, monkeypatch
+):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["dialogue"] = {"text": "hello there", "speaker": "girl"}
+    shot["generation"]["voice"] = {
+        "status": "completed", "attempts": 1,
+        "artifact": {
+            "path": "06_audio/dialogue/S01_SH01.wav", "size_bytes": 5, "sha256": None,
+            "duration_seconds": 3.5,
+        },
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)  # shot's own duration_seconds stays 2
+    _approve(project_dir)
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-video", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].duration_seconds == 3.5  # voice's real length, not the shot's static 2
+
+
+def test_generate_video_uses_static_duration_without_dialogue(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    _approve(project_dir)
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-video", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].duration_seconds == 2  # the shot's own static duration_seconds
+
+
+def test_generate_video_uses_static_duration_when_voice_not_yet_completed(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["dialogue"] = {"text": "hello there", "speaker": "girl"}
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)  # voice stays not_required/pending
+    _approve(project_dir)
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-video", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].duration_seconds == 2
+
+
+def test_generate_lipsync_requires_video_generated_first(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["generation"]["voice"] = {
+        "status": "completed", "attempts": 1,
+        "artifact": {
+            "path": "06_audio/dialogue/S01_SH01.wav", "size_bytes": 5, "sha256": None,
+            "duration_seconds": 3.5,
+        },
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+
+    result = runner.invoke(app, ["generate-lipsync", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 1
+    assert "video must be generated" in result.output
+
+
+def test_generate_lipsync_requires_voice_generated_first(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["generation"]["video"] = {
+        "status": "completed", "attempts": 1, "version": 1, "history": [],
+        "artifact": {
+            "path": "05_video/S01_SH01.mp4", "size_bytes": 10, "sha256": None,
+            "duration_seconds": 5.0,
+        },
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+
+    result = runner.invoke(app, ["generate-lipsync", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 1
+    assert "voice must be generated" in result.output
+
+
+def test_generate_lipsync_supersedes_the_video_artifact(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["dialogue"] = {"text": "hello there", "speaker": "girl"}
+    shot["generation"]["video"] = {
+        "status": "completed", "attempts": 1, "version": 1, "history": [],
+        "artifact": {
+            "path": "05_video/S01_SH01.mp4", "size_bytes": 10, "sha256": None,
+            "duration_seconds": 3.5,
+        },
+    }
+    shot["generation"]["voice"] = {
+        "status": "completed", "attempts": 1,
+        "artifact": {
+            "path": "06_audio/dialogue/S01_SH01.wav", "size_bytes": 5, "sha256": None,
+            "duration_seconds": 3.5,
+        },
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _approve(project_dir)
+
+    result = runner.invoke(app, ["generate-lipsync", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+
+    updated = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    video = updated["generation"]["video"]
+    assert video["status"] == "completed"
+    assert video["version"] == 2
+    assert len(video["history"]) == 1
+    assert video["history"][0]["superseded_reason"] == "lipsync"
+    assert video["artifact"]["lipsynced"] is True
+    assert Path(project_dir / video["artifact"]["path"]).exists()
+
+
+def test_generate_video_regeneration_clears_the_lipsynced_tag(tmp_path: Path):
+    """A shot whose video was already lip-synced, then regenerated (e.g. a
+    feedback-driven `generate-video --force` on `visual`/`camera`/`action`),
+    must not carry the stale `lipsynced` tag forward onto the new, unsynced
+    artifact — there is nothing enforcing this in the schema, only that
+    generate-video always writes a fresh artifact dict via
+    _video_or_audio_artifact, which never sets the key at all."""
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["generation"]["video"] = {
+        "status": "completed", "attempts": 1, "version": 2, "history": [],
+        "artifact": {
+            "path": "05_video/S01_SH01.mp4", "size_bytes": 10, "sha256": None,
+            "duration_seconds": 2.0, "lipsynced": True,
+        },
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _approve(project_dir)
+
+    result = runner.invoke(
+        app, ["generate-video", "--shot", "S01_SH01", "--path", str(project_dir), "--force"]
+    )
+    assert result.exit_code == 0, result.output
+
+    updated = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    assert "lipsynced" not in updated["generation"]["video"]["artifact"]

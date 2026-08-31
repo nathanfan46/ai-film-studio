@@ -6,6 +6,7 @@ from ai_film.models import (
     ImageEditRequest,
     ImageGenerationRequest,
     JobStatus,
+    LipsyncGenerationRequest,
     MusicGenerationRequest,
     SfxGenerationRequest,
     VideoGenerationRequest,
@@ -14,6 +15,7 @@ from ai_film.models import (
 from ai_film.providers.fal.audio import FalAudioProvider, _speaker_id
 from ai_film.providers.fal.catalog import FalProviderCatalog
 from ai_film.providers.fal.image import FalImageProvider
+from ai_film.providers.fal.lipsync import FalLipsyncProvider
 from ai_film.providers.fal.video import FalVideoProvider
 
 
@@ -460,3 +462,52 @@ def test_h3_max_sends_integer_duration_and_prompt_expansion_mode(
     assert sent_input["prompt_expansion_mode"] == "balanced"
     assert sent_input["image_url"] == "https://cdn.fal.run/ref.png"
     assert "generate_audio" not in sent_input
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_lipsync_provider_uploads_video_and_audio_and_returns_original_duration(
+    mock_requests, tmp_path: Path, monkeypatch
+):
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    submit_response = MagicMock(status_code=200)
+    submit_response.json.return_value = {
+        "request_id": "req-lipsync", "status_url": "https://queue.fal.run/status/req-lipsync",
+        "response_url": "https://queue.fal.run/result/req-lipsync",
+    }
+    status_response = MagicMock(status_code=200)
+    status_response.json.return_value = {"status": "COMPLETED"}
+    result_response = MagicMock(status_code=200)
+    result_response.json.return_value = {"video": {"url": "https://cdn.fal.run/synced.mp4"}}
+    download_response = MagicMock(status_code=200, content=b"SYNCED-MP4")
+
+    mock_requests.post.return_value = submit_response
+    mock_requests.get.side_effect = [status_response, result_response, download_response]
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file",
+        lambda path: f"https://cdn.fal.run/{Path(path).name}",
+    )
+
+    provider = FalLipsyncProvider()
+    output_path = tmp_path / "synced.mp4"
+    request = LipsyncGenerationRequest(
+        video_path=str(tmp_path / "video.mp4"), audio_path=str(tmp_path / "voice.wav"),
+        model="kling-lipsync", duration_seconds=4.2, output_path=str(output_path),
+    )
+    job = provider.submit(request)
+
+    called_url = mock_requests.post.call_args.args[0]
+    assert called_url == "https://queue.fal.run/fal-ai/kling-video/lipsync/audio-to-video"
+    sent_input = mock_requests.post.call_args.kwargs["json"]
+    assert sent_input == {
+        "video_url": "https://cdn.fal.run/video.mp4", "audio_url": "https://cdn.fal.run/voice.wav",
+    }
+    assert provider.poll(job) == JobStatus.COMPLETED
+    result = provider.get_result(job)
+    assert output_path.read_bytes() == b"SYNCED-MP4"
+    assert result.duration_seconds == 4.2  # carried from the request, not probed from the file
+
+
+def test_catalog_lists_the_lipsync_model():
+    catalog = FalProviderCatalog()
+    model_names = {m.model for m in catalog.models(Capability.LIPSYNC)}
+    assert "kling-lipsync" in model_names

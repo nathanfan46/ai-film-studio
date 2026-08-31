@@ -162,9 +162,20 @@ Everything else (`validate`, `check-continuity`, `approve-generation`, `generate
 
 Run `ai-film --help` or `ai-film <command> --help` for the full list and flags. Full
 command set: `init`, `models`, `status`, `validate`, `generate-image`, `generate-video`,
-`generate-voice`, `generate-sfx`, `generate-music`, `generate-all`, `check-continuity`,
-`approve-generation`, `render`, `generate-candidates`, `review`, `select-candidate`,
-`edit-candidate`, `add-feedback`, `resolve-feedback`, `apply-audio-offset`, `review-media`.
+`generate-voice`, `generate-lipsync`, `generate-sfx`, `generate-music`, `generate-all`,
+`check-continuity`, `approve-generation`, `render`, `generate-candidates`, `review`,
+`select-candidate`, `edit-candidate`, `add-feedback`, `resolve-feedback`,
+`apply-audio-offset`, `review-media`.
+
+`generate-lipsync` runs an audio-driven lip-sync pass over a shot's already-generated
+video and voice, superseding the video artifact with the synced result (same
+version/history bookkeeping as any other video regeneration — `render` and everything
+else downstream needs no changes to pick it up). It requires both stages already
+`completed`; there's no `--force` flag since it always supersedes by design. Also note:
+`generate-video` automatically sizes a dialogue shot's video to its voice's actual
+measured duration (once the voice is generated) instead of the shot's static
+`duration_seconds` — generate voice before video for a dialogue shot if you want them
+to end up the same length.
 
 The last four are the media review layer, for reviewing generated video/audio and
 fixing cheap timing issues without a provider call:
@@ -244,10 +255,14 @@ Locations get the same locked-reference-image treatment characters do — the
 Environment agent runs once per unique location the Director's scenes name, before
 Storyboard writes any shots, and every shot's generation conditions on its scene's
 locked location the same way it already conditions on its characters. The Media
-agent generates each shot's video (and voice, if it has dialogue), opens the static
-review page, and applies fixes — a cheap audio-offset nudge, a targeted `shot.json`
-field edit plus regeneration, or a clarifying question — until you confirm the shot;
-sfx/music generate only when you explicitly ask for them on a shot. See
+agent generates each shot's video and, if it has dialogue, its voice first — sizing
+the video to the voice's actual measured length rather than a static guess, then
+running a lip-sync pass (`generate-lipsync`) so the video's mouth movement is
+audio-driven instead of coincidental. It opens the static review page and applies
+fixes — a cheap audio-offset nudge, a targeted `shot.json` field edit plus
+regeneration (which re-triggers the voice/video/lipsync chain as needed), or a
+clarifying question — until you confirm the shot; sfx/music generate only when you
+explicitly ask for them on a shot. See
 `docs/superpowers/specs/2026-08-23-agent-layer-design.md`,
 `docs/superpowers/plans/2026-08-23-agent-layer.md`,
 `docs/superpowers/specs/2026-08-28-media-agent-design.md`,

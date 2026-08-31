@@ -13,6 +13,7 @@ from ai_film.models import (
     GenerationJob,
     ImageGenerationRequest,
     JobStatus,
+    LipsyncGenerationRequest,
     MusicGenerationRequest,
     SfxGenerationRequest,
     VideoGenerationRequest,
@@ -115,6 +116,7 @@ def run_generation_stage(
     max_attempts: int = 3,
     poll_interval_seconds: float = 0.0,
     force: bool = False,
+    superseded_reason: str = "regenerate",
 ) -> dict:
     shot = load_shot(shot_path)
     shot_id = shot["id"]
@@ -129,7 +131,7 @@ def run_generation_stage(
     if stage_data.get("status") == "completed" and not force:
         return stage_data
 
-    archive = archive_stage_artifact(project_dir, stage_data, "regenerate")
+    archive = archive_stage_artifact(project_dir, stage_data, superseded_reason)
 
     def on_attempt(attempt: int, job: GenerationJob | None, outcome: str) -> None:
         write_attempt_log(
@@ -212,6 +214,20 @@ def _video_or_audio_artifact(result) -> dict:
     }
 
 
+def _lipsync_video_artifact(result) -> dict:
+    """Same shape as _video_or_audio_artifact, tagged so callers (the
+    engine doesn't enforce this itself — generate_lipsync always forces,
+    unlike every other stage) can tell the *current* video artifact already
+    went through a lipsync pass, without needing a separate schema field or
+    generation stage. A later plain generate-video regeneration replaces
+    this artifact dict wholesale via the same _video_or_audio_artifact
+    builder, so the tag correctly disappears again for a fresh, unsynced
+    artifact — no explicit reset needed anywhere."""
+    artifact = _video_or_audio_artifact(result)
+    artifact["lipsynced"] = True
+    return artifact
+
+
 def generate_image(
     project_dir: Path,
     shot_path: Path,
@@ -268,6 +284,47 @@ def generate_video(
         provider_name=provider_name, model_name=model,
         max_attempts=max_attempts, poll_interval_seconds=poll_interval_seconds,
         force=force,
+    )
+
+
+def generate_lipsync(
+    project_dir: Path,
+    shot_path: Path,
+    provider,
+    video_path: str,
+    audio_path: str,
+    model: str,
+    duration_seconds: float,
+    output_path: Path,
+    provider_name: str,
+    max_attempts: int = 3,
+    poll_interval_seconds: float = 0.0,
+) -> dict:
+    """Runs an audio-driven lip-sync pass over an already-locked video, and
+    supersedes the video stage's own artifact with the synced result — the
+    same version/history bookkeeping as any other video regeneration, so
+    render (and everything downstream) automatically uses the synced clip
+    with no changes needed there. There is no separate "lipsync" stage in
+    shot.json; each pass shows up as one more entry in generation.video's
+    own history, tagged via superseded_reason.
+
+    Always supersedes the current video artifact (force=True is implicit,
+    not a caller choice) — running this at all only makes sense once a
+    video already exists to sync against; there is no "don't force" case.
+    """
+    request = LipsyncGenerationRequest(
+        video_path=video_path, audio_path=audio_path, model=model,
+        duration_seconds=duration_seconds, output_path=str(output_path),
+    )
+    return run_generation_stage(
+        project_dir=project_dir, shot_path=shot_path, stage="video",
+        scope=_SCOPE_BY_STAGE["video"],
+        submit_fn=lambda: provider.submit(request),
+        poll_fn=provider.poll, get_result_fn=provider.get_result,
+        result_to_artifact=_lipsync_video_artifact,
+        provider_name=provider_name, model_name=model,
+        max_attempts=max_attempts, poll_interval_seconds=poll_interval_seconds,
+        force=True, superseded_reason="lipsync",
     )
 
 

@@ -17,6 +17,7 @@ class Capability(str, Enum):
     VOICE = "voice"
     SFX = "sfx"
     MUSIC = "music"
+    LIPSYNC = "lipsync"
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,15 @@ class VideoGenerationResult:
     artifact_path: str
     size_bytes: int
     duration_seconds: float
+
+
+@dataclass
+class LipsyncGenerationRequest:
+    video_path: str
+    audio_path: str
+    model: str
+    duration_seconds: float
+    output_path: str = ""
 
 
 @dataclass

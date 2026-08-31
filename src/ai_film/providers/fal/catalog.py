@@ -24,6 +24,10 @@ _MODELS = [
     ModelInfo("fal", "csm-1b", Capability.VOICE, "CSM-1B conversational speech"),
     ModelInfo("fal", "thinksound", Capability.SFX, "ThinkSound (video-to-audio)"),
     ModelInfo("fal", "csm-1b", Capability.MUSIC, "CSM-1B (placeholder music backend)"),
+    ModelInfo(
+        "fal", "kling-lipsync", Capability.LIPSYNC,
+        "Kling Lipsync (audio-driven mouth sync on an existing video, $0.014/5s)",
+    ),
 ]
 
 

@@ -8,12 +8,14 @@ from ai_film.models import (
     ImageEditRequest,
     ImageGenerationRequest,
     JobStatus,
+    LipsyncGenerationRequest,
     MusicGenerationRequest,
     SfxGenerationRequest,
     VoiceGenerationRequest,
 )
 from ai_film.providers.mock.image import MockImageProvider
 from ai_film.providers.mock.audio import MockAudioProvider
+from ai_film.providers.mock.lipsync import MockLipsyncProvider
 
 
 def test_mock_image_provider_completes_and_writes_artifact(tmp_path: Path):
@@ -112,6 +114,22 @@ def test_mock_image_provider_submit_edit_raises_when_unsupported(tmp_path: Path)
     request = ImageEditRequest(base_image_path=str(tmp_path / "001.png"), instruction="warmer")
     with pytest.raises(NotImplementedError):
         provider.submit_edit(request)
+
+
+def test_mock_lipsync_provider_completes_and_writes_artifact(tmp_path: Path):
+    provider = MockLipsyncProvider()
+    output_path = tmp_path / "synced.mp4"
+    request = LipsyncGenerationRequest(
+        video_path=str(tmp_path / "video.mp4"), audio_path=str(tmp_path / "voice.wav"),
+        model="kling-lipsync", duration_seconds=4.2, output_path=str(output_path),
+    )
+    job = provider.submit(request)
+    assert job.capability == Capability.LIPSYNC
+    assert provider.poll(job) == JobStatus.COMPLETED
+    result = provider.get_result(job)
+    assert result.artifact_path == str(output_path)
+    assert output_path.exists()
+    assert result.duration_seconds == 4.2
 
 
 def test_mock_image_provider_submit_edit_completes_when_supported(tmp_path: Path):

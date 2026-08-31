@@ -3,9 +3,11 @@ from __future__ import annotations
 from ai_film.models import Capability
 from ai_film.providers.fal.audio import FalAudioProvider
 from ai_film.providers.fal.image import FalImageProvider
+from ai_film.providers.fal.lipsync import FalLipsyncProvider
 from ai_film.providers.fal.video import FalVideoProvider
 from ai_film.providers.mock.audio import MockAudioProvider
 from ai_film.providers.mock.image import MockImageProvider
+from ai_film.providers.mock.lipsync import MockLipsyncProvider
 from ai_film.providers.mock.video import MockVideoProvider
 
 _REGISTRIES = {
@@ -14,6 +16,7 @@ _REGISTRIES = {
     Capability.VOICE: {"fal": FalAudioProvider, "mock": MockAudioProvider},
     Capability.SFX: {"fal": FalAudioProvider, "mock": MockAudioProvider},
     Capability.MUSIC: {"fal": FalAudioProvider, "mock": MockAudioProvider},
+    Capability.LIPSYNC: {"fal": FalLipsyncProvider, "mock": MockLipsyncProvider},
 }
 
 
