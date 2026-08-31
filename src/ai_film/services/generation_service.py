@@ -283,9 +283,11 @@ def generate_voice(
     max_attempts: int = 3,
     poll_interval_seconds: float = 0.0,
     force: bool = False,
+    speaker_id: int | None = None,
 ) -> dict:
     request = VoiceGenerationRequest(
-        text=text, model=model, speaker=speaker, output_path=str(output_path)
+        text=text, model=model, speaker=speaker, output_path=str(output_path),
+        speaker_id=speaker_id,
     )
     return run_generation_stage(
         project_dir=project_dir, shot_path=shot_path, stage="voice",

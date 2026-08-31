@@ -79,6 +79,7 @@ class VoiceGenerationRequest:
     model: str
     speaker: str = ""
     output_path: str = ""
+    speaker_id: int | None = None
 
 
 @dataclass

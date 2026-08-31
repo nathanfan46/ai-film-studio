@@ -1,10 +1,27 @@
 from __future__ import annotations
 
+import hashlib
+
 from ai_film.models import (
     AudioGenerationResult, Capability, GenerationJob, JobStatus,
     MusicGenerationRequest, SfxGenerationRequest, VoiceGenerationRequest,
 )
 from ai_film.providers.fal import client
+
+# csm-1b's speaker_id is just an arbitrary integer voice slot for the call
+# (no named voice bank without supplying `context` audio samples, and the
+# API documents no upper bound on the value) — derive a stable int per
+# speaker name so the same character consistently maps to the same slot
+# across separate generate-voice calls. The modulus is intentionally wide:
+# a small one (e.g. 5) collides in practice with as few as 2-3 distinct
+# character names, silently giving two different characters the same
+# voice — the opposite of "locked". 1000 keeps collision probability
+# negligible for any realistic per-story character count while staying a
+# small, sane integer.
+def _speaker_id(speaker: str) -> int:
+    if not speaker:
+        return 0
+    return int(hashlib.sha256(speaker.encode()).hexdigest(), 16) % 1000
 
 VOICE_MODEL_TO_APP_ID = {"csm-1b": "fal-ai/csm-1b"}
 SFX_MODEL_TO_APP_ID = {"thinksound": "fal-ai/thinksound"}
@@ -19,7 +36,12 @@ class FalAudioProvider:
 
     def submit_voice(self, request: VoiceGenerationRequest) -> GenerationJob:
         app_id = VOICE_MODEL_TO_APP_ID[request.model]
-        input_data = {"text": request.text, "speaker_id": request.speaker or "0"}
+        speaker_id = (
+            request.speaker_id if request.speaker_id is not None else _speaker_id(request.speaker)
+        )
+        input_data = {
+            "scene": [{"speaker_id": speaker_id, "text": request.text}],
+        }
         return self._submit(app_id, input_data, request, Capability.VOICE, duration_seconds=2.0)
 
     def submit_sfx(self, request: SfxGenerationRequest) -> GenerationJob:
