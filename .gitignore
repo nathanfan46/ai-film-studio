@@ -9,3 +9,5 @@ venv/
 build/
 dist/
 project/
+one-more-life/
+.env
