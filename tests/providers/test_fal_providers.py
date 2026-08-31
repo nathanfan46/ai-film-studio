@@ -364,3 +364,99 @@ def test_video_provider_falls_back_to_text_endpoint_for_models_without_an_i2v_ma
     sent_input = mock_requests.post.call_args.kwargs["json"]
     assert sent_input["image_url"] == "https://cdn.fal.run/ref.png"
     assert "generate_audio" not in sent_input
+
+
+def test_catalog_lists_the_three_minimax_video_models():
+    catalog = FalProviderCatalog()
+    model_names = {m.model for m in catalog.models(Capability.VIDEO)}
+    assert {"hailuo-2.3", "hailuo-2.3-fast", "h3-max"} <= model_names
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_hailuo_2_3_sends_bare_string_duration(mock_requests, tmp_path: Path, monkeypatch):
+    """Verified against fal.ai's OpenAPI schema for
+    fal-ai/minimax/hailuo-2.3/standard/image-to-video: duration is a string
+    enum of "6"/"10", not "6s"/"10s" like veo-3."""
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    _mock_submit_response(mock_requests)
+    reference = tmp_path / "ref.png"
+    reference.write_bytes(b"REF-PNG")
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file", lambda path: "https://cdn.fal.run/ref.png"
+    )
+
+    provider = FalVideoProvider()
+    provider.submit(
+        VideoGenerationRequest(
+            prompt="a girl walks", model="hailuo-2.3", reference_paths=[str(reference)],
+            duration_seconds=7, output_path=str(tmp_path / "out.mp4"),
+        )
+    )
+
+    called_url = mock_requests.post.call_args.args[0]
+    assert called_url == "https://queue.fal.run/fal-ai/minimax/hailuo-2.3/standard/image-to-video"
+    sent_input = mock_requests.post.call_args.kwargs["json"]
+    assert sent_input["duration"] == "6"  # 7s snaps to the nearest allowed value, 6
+    assert sent_input["image_url"] == "https://cdn.fal.run/ref.png"
+    assert "generate_audio" not in sent_input
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_hailuo_2_3_fast_omits_duration_field_entirely(mock_requests, tmp_path: Path, monkeypatch):
+    """Verified against fal.ai's OpenAPI schema for
+    fal-ai/minimax/hailuo-2.3-fast/pro/image-to-video: there is no
+    "duration" field declared at all — the clip length is fixed."""
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    _mock_submit_response(mock_requests)
+    reference = tmp_path / "ref.png"
+    reference.write_bytes(b"REF-PNG")
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file", lambda path: "https://cdn.fal.run/ref.png"
+    )
+
+    provider = FalVideoProvider()
+    provider.submit(
+        VideoGenerationRequest(
+            prompt="a girl walks", model="hailuo-2.3-fast", reference_paths=[str(reference)],
+            duration_seconds=6, output_path=str(tmp_path / "out.mp4"),
+        )
+    )
+
+    called_url = mock_requests.post.call_args.args[0]
+    assert called_url == "https://queue.fal.run/fal-ai/minimax/hailuo-2.3-fast/pro/image-to-video"
+    sent_input = mock_requests.post.call_args.kwargs["json"]
+    assert "duration" not in sent_input
+    assert sent_input["image_url"] == "https://cdn.fal.run/ref.png"
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_h3_max_sends_integer_duration_and_prompt_expansion_mode(
+    mock_requests, tmp_path: Path, monkeypatch
+):
+    """Verified against fal.ai's OpenAPI schema for
+    minimax/h3-max/image-to-video: duration is a plain integer (5-15s), not
+    a string, and prompt_expansion_mode is required (default "balanced")."""
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    _mock_submit_response(mock_requests)
+    reference = tmp_path / "ref.png"
+    reference.write_bytes(b"REF-PNG")
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file", lambda path: "https://cdn.fal.run/ref.png"
+    )
+
+    provider = FalVideoProvider()
+    provider.submit(
+        VideoGenerationRequest(
+            prompt="a girl walks", model="h3-max", reference_paths=[str(reference)],
+            duration_seconds=5, output_path=str(tmp_path / "out.mp4"),
+        )
+    )
+
+    called_url = mock_requests.post.call_args.args[0]
+    assert called_url == "https://queue.fal.run/minimax/h3-max/image-to-video"
+    sent_input = mock_requests.post.call_args.kwargs["json"]
+    assert sent_input["duration"] == 5
+    assert isinstance(sent_input["duration"], int)
+    assert sent_input["prompt_expansion_mode"] == "balanced"
+    assert sent_input["image_url"] == "https://cdn.fal.run/ref.png"
+    assert "generate_audio" not in sent_input
