@@ -511,3 +511,48 @@ def test_catalog_lists_the_lipsync_model():
     catalog = FalProviderCatalog()
     model_names = {m.model for m in catalog.models(Capability.LIPSYNC)}
     assert "kling-lipsync" in model_names
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_video_result_records_the_snapped_duration_not_the_raw_request(
+    mock_requests, tmp_path: Path, monkeypatch
+):
+    """Regression test: get_result() previously recorded
+    request.duration_seconds verbatim — the value ASKED for, before
+    per-model snapping — rather than what was actually sent (and, per each
+    model's docs, honored). Confirmed against a real generation: a 2.0s
+    request to h3-max (whose floor is 5s) produced a real 5.18s video file
+    (checked with ffprobe), but the artifact recorded duration_seconds:
+    2.0 — silently wrong, and undermining the whole point of syncing video
+    length to voice length in the first place."""
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    reference = tmp_path / "ref.png"
+    reference.write_bytes(b"REF-PNG")
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file", lambda path: "https://cdn.fal.run/ref.png"
+    )
+    submit_response = MagicMock(status_code=200)
+    submit_response.json.return_value = {
+        "request_id": "req-1", "status_url": "https://queue.fal.run/status/req-1",
+        "response_url": "https://queue.fal.run/result/req-1",
+    }
+    status_response = MagicMock(status_code=200)
+    status_response.json.return_value = {"status": "COMPLETED"}
+    result_response = MagicMock(status_code=200)
+    result_response.json.return_value = {"video": {"url": "https://cdn.fal.run/out.mp4"}}
+    download_response = MagicMock(status_code=200, content=b"MP4-BYTES")
+    mock_requests.post.return_value = submit_response
+    mock_requests.get.side_effect = [status_response, result_response, download_response]
+
+    provider = FalVideoProvider()
+    job = provider.submit(
+        VideoGenerationRequest(
+            prompt="a woman listens", model="h3-max", reference_paths=[str(reference)],
+            duration_seconds=2.0, output_path=str(tmp_path / "out.mp4"),
+        )
+    )
+    assert provider.poll(job) == JobStatus.COMPLETED
+    result = provider.get_result(job)
+
+    assert result.duration_seconds == 5  # h3-max's floor — what was actually sent and honored
+    assert result.duration_seconds != 2.0  # not the raw, pre-snap request value

@@ -613,6 +613,12 @@ def test_generate_lipsync_supersedes_the_video_artifact(tmp_path: Path):
     }
     save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
     _approve(project_dir)
+    # generate_lipsync copies these before run_generation_stage archives the
+    # current video artifact — the source files must genuinely exist on disk.
+    (project_dir / "05_video" / "S01_SH01.mp4").parent.mkdir(parents=True, exist_ok=True)
+    (project_dir / "05_video" / "S01_SH01.mp4").write_bytes(b"ORIGINAL-MP4-DATA")
+    (project_dir / "06_audio" / "dialogue" / "S01_SH01.wav").parent.mkdir(parents=True, exist_ok=True)
+    (project_dir / "06_audio" / "dialogue" / "S01_SH01.wav").write_bytes(b"ORIGINAL-WAV-DATA")
 
     result = runner.invoke(app, ["generate-lipsync", "--shot", "S01_SH01", "--path", str(project_dir)])
     assert result.exit_code == 0, result.output
@@ -624,7 +630,77 @@ def test_generate_lipsync_supersedes_the_video_artifact(tmp_path: Path):
     assert len(video["history"]) == 1
     assert video["history"][0]["superseded_reason"] == "lipsync"
     assert video["artifact"]["lipsynced"] is True
-    assert Path(project_dir / video["artifact"]["path"]).exists()
+    # The superseded original was archived into history, not deleted.
+    assert (project_dir / "05_video" / "history" / "S01_SH01_v1.mp4").read_bytes() == b"ORIGINAL-MP4-DATA"
+
+
+class _FileReadingLipsyncProvider:
+    """Actually reads bytes from request.video_path/audio_path at submit()
+    time, mirroring what the real FalLipsyncProvider does via
+    client.upload_file -> file_path.read_bytes(). This is what catches the
+    archive-before-upload race directly: run_generation_stage archives
+    (moves) the shot's current video artifact before calling submit_fn, so
+    if generate_lipsync ever again passes through the *original* canonical
+    path instead of a pre-archive copy, this raises FileNotFoundError here
+    exactly like the real bug did against the live fal API."""
+
+    def __init__(self):
+        self.read_video_bytes = None
+        self.read_audio_bytes = None
+        self._output_path = None
+
+    def submit(self, request):
+        self.read_video_bytes = Path(request.video_path).read_bytes()
+        self.read_audio_bytes = Path(request.audio_path).read_bytes()
+        self._output_path = request.output_path
+        return GenerationJob(provider="mock", id="job1", capability=Capability.LIPSYNC)
+
+    def poll(self, job):
+        return JobStatus.COMPLETED
+
+    def get_result(self, job):
+        output_path = Path(self._output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"SYNCED-MP4-DATA")
+        return VideoGenerationResult(
+            artifact_path=str(output_path), size_bytes=len(b"SYNCED-MP4-DATA"), duration_seconds=3.5,
+        )
+
+
+def test_generate_lipsync_reads_input_files_before_the_video_artifact_is_archived(
+    tmp_path: Path, monkeypatch
+):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["dialogue"] = {"text": "hello there", "speaker": "girl"}
+    shot["generation"]["video"] = {
+        "status": "completed", "attempts": 1, "version": 1, "history": [],
+        "artifact": {
+            "path": "05_video/S01_SH01.mp4", "size_bytes": 10, "sha256": None,
+            "duration_seconds": 3.5,
+        },
+    }
+    shot["generation"]["voice"] = {
+        "status": "completed", "attempts": 1,
+        "artifact": {
+            "path": "06_audio/dialogue/S01_SH01.wav", "size_bytes": 5, "sha256": None,
+            "duration_seconds": 3.5,
+        },
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _approve(project_dir)
+    (project_dir / "05_video" / "S01_SH01.mp4").parent.mkdir(parents=True, exist_ok=True)
+    (project_dir / "05_video" / "S01_SH01.mp4").write_bytes(b"ORIGINAL-MP4-DATA")
+    (project_dir / "06_audio" / "dialogue" / "S01_SH01.wav").parent.mkdir(parents=True, exist_ok=True)
+    (project_dir / "06_audio" / "dialogue" / "S01_SH01.wav").write_bytes(b"ORIGINAL-WAV-DATA")
+
+    provider = _FileReadingLipsyncProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-lipsync", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.read_video_bytes == b"ORIGINAL-MP4-DATA"
+    assert provider.read_audio_bytes == b"ORIGINAL-WAV-DATA"
 
 
 def test_generate_video_regeneration_clears_the_lipsynced_tag(tmp_path: Path):

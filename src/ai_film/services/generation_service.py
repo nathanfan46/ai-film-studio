@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -311,21 +313,43 @@ def generate_lipsync(
     Always supersedes the current video artifact (force=True is implicit,
     not a caller choice) — running this at all only makes sense once a
     video already exists to sync against; there is no "don't force" case.
+
+    video_path/audio_path are copied to a temp location before
+    run_generation_stage runs, because run_generation_stage archives (moves)
+    the *current* video artifact before calling submit_fn — for every other
+    stage that's fine, since their inputs (prompts, reference images) are
+    unrelated to the artifact being superseded, but lipsync's whole input
+    *is* that artifact. Without the copy, the archive move races the
+    provider's upload of the same path and always wins, since archiving
+    happens first by construction — confirmed against the real API: the
+    archived file vanished out from under an in-flight upload every time,
+    not an occasional glitch. The temp copies are immune to the move
+    regardless of timing, and are cleaned up whether the call succeeds or
+    fails.
     """
-    request = LipsyncGenerationRequest(
-        video_path=video_path, audio_path=audio_path, model=model,
-        duration_seconds=duration_seconds, output_path=str(output_path),
-    )
-    return run_generation_stage(
-        project_dir=project_dir, shot_path=shot_path, stage="video",
-        scope=_SCOPE_BY_STAGE["video"],
-        submit_fn=lambda: provider.submit(request),
-        poll_fn=provider.poll, get_result_fn=provider.get_result,
-        result_to_artifact=_lipsync_video_artifact,
-        provider_name=provider_name, model_name=model,
-        max_attempts=max_attempts, poll_interval_seconds=poll_interval_seconds,
-        force=True, superseded_reason="lipsync",
-    )
+    tmp_dir = Path(tempfile.mkdtemp(prefix="ai-film-lipsync-"))
+    try:
+        tmp_video_path = tmp_dir / Path(video_path).name
+        tmp_audio_path = tmp_dir / Path(audio_path).name
+        shutil.copy(video_path, tmp_video_path)
+        shutil.copy(audio_path, tmp_audio_path)
+
+        request = LipsyncGenerationRequest(
+            video_path=str(tmp_video_path), audio_path=str(tmp_audio_path), model=model,
+            duration_seconds=duration_seconds, output_path=str(output_path),
+        )
+        return run_generation_stage(
+            project_dir=project_dir, shot_path=shot_path, stage="video",
+            scope=_SCOPE_BY_STAGE["video"],
+            submit_fn=lambda: provider.submit(request),
+            poll_fn=provider.poll, get_result_fn=provider.get_result,
+            result_to_artifact=_lipsync_video_artifact,
+            provider_name=provider_name, model_name=model,
+            max_attempts=max_attempts, poll_interval_seconds=poll_interval_seconds,
+            force=True, superseded_reason="lipsync",
+        )
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def generate_voice(

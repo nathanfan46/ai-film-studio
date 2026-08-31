@@ -108,8 +108,27 @@ class FalVideoProvider:
         body = client.result(response_url)
         video_url = body["video"]["url"]
         size_bytes = client.download(video_url, request.output_path)
+        if request.model in _NO_DURATION_FIELD_MODELS:
+            # No duration was ever sent for this model — the requested value
+            # was never honored (or rejected) either way, so it's the only
+            # information available; the model's actual fixed clip length is
+            # undocumented.
+            duration_seconds = request.duration_seconds
+        else:
+            # request.duration_seconds is what was ASKED for, before
+            # per-model snapping (e.g. h3-max's 5-15s floor/ceiling). What
+            # actually got sent — and, per each model's own docs, honored —
+            # is _snap_duration's result. Recording the pre-snap value here
+            # was a real, verified bug: for a shot whose voice measured
+            # under a model's minimum (h3-max's floor is 5s), the recorded
+            # artifact duration silently didn't match the actual video file
+            # (confirmed via ffprobe against a real generation: request said
+            # 2.0s, the real output was 5.18s) — undermining the exact
+            # video/voice duration-matching this file's _duration_field
+            # exists to support.
+            duration_seconds = _snap_duration(request.model, request.duration_seconds)
         return VideoGenerationResult(
             artifact_path=request.output_path,
             size_bytes=size_bytes,
-            duration_seconds=request.duration_seconds,
+            duration_seconds=duration_seconds,
         )
