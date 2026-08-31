@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -289,6 +290,48 @@ def generate_video(
     )
 
 
+# fal's Kling lipsync endpoint rejects audio under 2.0s
+# (audio_duration_too_short). Short dialogue lines ("I know.") routinely
+# produce clips under that from TTS — confirmed against a real generation:
+# a one-word line came back at 0.72s. Padded a bit past the documented
+# floor for margin, not right up against it.
+_MIN_LIPSYNC_AUDIO_SECONDS = 2.5
+
+
+def _pad_audio_if_too_short(audio_path: Path) -> None:
+    """Pad audio_path in place with trailing silence up to
+    _MIN_LIPSYNC_AUDIO_SECONDS, if it's currently shorter than that.
+    Silence appended after the spoken line doesn't affect lip-sync for the
+    portion that's actually speech. Best-effort: if ffmpeg/ffprobe aren't
+    available or probing fails, leaves the file untouched and lets the
+    provider's own error (if any) surface normally rather than guessing."""
+    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+        return
+    probe = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path),
+        ],
+        capture_output=True, text=True,
+    )
+    try:
+        duration = float(probe.stdout.strip())
+    except ValueError:
+        return
+    if duration >= _MIN_LIPSYNC_AUDIO_SECONDS:
+        return
+    padded_path = audio_path.with_name(audio_path.stem + "_padded" + audio_path.suffix)
+    result = subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", str(audio_path), "-af",
+            f"apad=whole_dur={_MIN_LIPSYNC_AUDIO_SECONDS}", str(padded_path),
+        ],
+        capture_output=True,
+    )
+    if result.returncode == 0:
+        padded_path.replace(audio_path)
+
+
 def generate_lipsync(
     project_dir: Path,
     shot_path: Path,
@@ -333,6 +376,7 @@ def generate_lipsync(
         tmp_audio_path = tmp_dir / Path(audio_path).name
         shutil.copy(video_path, tmp_video_path)
         shutil.copy(audio_path, tmp_audio_path)
+        _pad_audio_if_too_short(tmp_audio_path)
 
         request = LipsyncGenerationRequest(
             video_path=str(tmp_video_path), audio_path=str(tmp_audio_path), model=model,

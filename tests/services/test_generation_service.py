@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -5,7 +7,11 @@ import pytest
 from ai_film.approval import approve_generation
 from ai_film.errors import CostGateError
 from ai_film.providers.mock.image import MockImageProvider
-from ai_film.services.generation_service import generate_image
+from ai_film.services.generation_service import (
+    _MIN_LIPSYNC_AUDIO_SECONDS,
+    _pad_audio_if_too_short,
+    generate_image,
+)
 from ai_film.shot_store import load_shot, save_shot
 
 
@@ -280,3 +286,59 @@ def test_generate_video_preserves_version_across_a_failed_then_successful_regene
     v2_history_entry = next(h for h in third["history"] if h["version"] == 2)
     v2_archived_path = project_dir / v2_history_entry["artifact"]["path"]
     assert v2_archived_path.read_bytes() == b"GOOD-V2-BYTES", "the v2 artifact must survive, not be destroyed"
+
+
+def _synthesize_silence(path: Path, seconds: float) -> None:
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+            "-t", str(seconds), str(path),
+        ],
+        check=True, capture_output=True,
+    )
+
+
+def _probe_duration(path: Path) -> float:
+    probe = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", str(path),
+        ],
+        capture_output=True, text=True,
+    )
+    return float(probe.stdout.strip())
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_pad_audio_if_too_short_pads_a_clip_under_the_minimum(tmp_path: Path):
+    short_clip = tmp_path / "short.wav"
+    _synthesize_silence(short_clip, 0.72)  # matches the real "I know." clip length found in testing
+    assert _probe_duration(short_clip) < _MIN_LIPSYNC_AUDIO_SECONDS
+
+    _pad_audio_if_too_short(short_clip)
+
+    assert _probe_duration(short_clip) >= _MIN_LIPSYNC_AUDIO_SECONDS
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_pad_audio_if_too_short_leaves_a_long_enough_clip_untouched(tmp_path: Path):
+    long_clip = tmp_path / "long.wav"
+    _synthesize_silence(long_clip, _MIN_LIPSYNC_AUDIO_SECONDS + 1.0)
+    original_bytes = long_clip.read_bytes()
+
+    _pad_audio_if_too_short(long_clip)
+
+    assert long_clip.read_bytes() == original_bytes, "a clip already long enough must not be re-encoded"
+
+
+def test_pad_audio_if_too_short_is_a_noop_without_ffmpeg(tmp_path: Path, monkeypatch):
+    """Best-effort: if ffmpeg/ffprobe aren't available, leave the file
+    untouched rather than guessing or raising — the provider's own error
+    (if the clip really is too short) surfaces normally instead."""
+    monkeypatch.setattr("ai_film.services.generation_service.shutil.which", lambda name: None)
+    clip = tmp_path / "clip.wav"
+    clip.write_bytes(b"NOT-REALLY-AUDIO")
+
+    _pad_audio_if_too_short(clip)  # must not raise
+
+    assert clip.read_bytes() == b"NOT-REALLY-AUDIO"
