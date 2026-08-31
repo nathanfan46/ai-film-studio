@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import typer
+from dotenv import find_dotenv, load_dotenv
 
 from ai_film import __version__
 from ai_film.approval import approve_generation as approve_generation_service
@@ -45,6 +46,16 @@ from ai_film.shot_store import (
     previous_shot_image_reference,
     save_shot,
 )
+
+def _load_env_file() -> None:
+    """Load a `.env` file (e.g. FAL_KEY) from the current working directory
+    or any parent, if one exists. A no-op if none is found — real
+    generation then fails with the existing "FAL_KEY environment variable
+    is not set" error, same as before this loaded automatically."""
+    load_dotenv(find_dotenv(usecwd=True))
+
+
+_load_env_file()
 
 app = typer.Typer(name="ai-film", help="AI Film Studio production engine.")
 
@@ -155,6 +166,19 @@ def _image_references(
     return references
 
 
+def _speaker_voice_id(path: Path, speaker: str) -> int | None:
+    """Optional per-project voice cast: 01_bibles/voices.json maps a
+    character name to the fal csm-1b speaker_id locked for their voice
+    (picked by ear, since speaker_id is just an arbitrary voice slot with
+    no gender/identity control on its own). Falls back to the provider's
+    hash-based default when the file or the speaker isn't listed."""
+    voices_path = path / "01_bibles" / "voices.json"
+    if not voices_path.exists():
+        return None
+    voices = json.loads(voices_path.read_text())
+    return voices.get(speaker)
+
+
 def _video_references(path: Path, shot_data: dict) -> list[str]:
     image_artifact = shot_data.get("generation", {}).get("image", {}).get("artifact")
     if image_artifact and image_artifact.get("path"):
@@ -228,6 +252,7 @@ def generate_voice_cmd(
             project_dir=path, shot_path=shot_path, provider=provider,
             text=dialogue.get("text", ""), model=stage_config["model"],
             speaker=dialogue.get("speaker", ""),
+            speaker_id=_speaker_voice_id(path, dialogue.get("speaker", "")),
             output_path=path / "06_audio" / "dialogue" / f"{shot}.wav",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
@@ -447,6 +472,7 @@ def _build_stage_call(path: Path, shot_id: str, stage: str, force: bool):
         project_dir=path, shot_path=shot_path, provider=provider,
         text=dialogue.get("text", ""), model=stage_config["model"],
         speaker=dialogue.get("speaker", ""),
+        speaker_id=_speaker_voice_id(path, dialogue.get("speaker", "")),
         output_path=path / "06_audio" / "dialogue" / f"{shot_id}.wav",
         provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
         poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
