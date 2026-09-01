@@ -165,9 +165,21 @@ def _image_references(
     path: Path, shot_id: str, shot_data: dict, quiet: bool = False
 ) -> list[str]:
     references = _character_and_environment_references(path, shot_data)
+
     prev_ref = previous_shot_image_reference(path, shot_id)
-    if prev_ref:
-        references.append(str(path / prev_ref))
+    prev_abs = str(path / prev_ref) if prev_ref else None
+
+    scene_id = scene_id_for_shot(shot_id)
+    if scene_id is not None:
+        continuity = load_continuity(path, scene_id)
+        master_ref = continuity.get("master_reference_image")
+        if master_ref and continuity.get("master_shot") != shot_id:
+            master_abs = str(path / master_ref)
+            if master_abs != prev_abs:
+                references.append(master_abs)
+
+    if prev_abs:
+        references.append(prev_abs)
     elif previous_shot_id(shot_id) is not None and not quiet:
         typer.echo(
             f"note: {shot_id}'s predecessor in this scene has no locked image yet — "
@@ -175,6 +187,13 @@ def _image_references(
             err=True,
         )
     return references
+
+
+def _effective_spatial(path: Path, shot_id: str) -> dict:
+    scene_id = scene_id_for_shot(shot_id)
+    if scene_id is None:
+        return {}
+    return effective_spatial_state(load_continuity(path, scene_id), shot_id)
 
 
 def _speaker_voice_id(path: Path, speaker: str) -> int | None:
@@ -212,7 +231,8 @@ def generate_image_cmd(
         provider = resolve_provider(Capability.IMAGE, stage_config["provider"])
         return generate_image_service(
             project_dir=path, shot_path=shot_path, provider=provider,
-            prompt=build_image_prompt(shot_data), model=stage_config["model"],
+            prompt=build_image_prompt(shot_data, spatial=_effective_spatial(path, shot)),
+            model=stage_config["model"],
             reference_paths=references, output_path=path / "04_storyboard" / f"{shot}.png",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
@@ -654,7 +674,8 @@ def _build_stage_call(path: Path, shot_id: str, stage: str, force: bool):
         references = _image_references(path, shot_id, shot_data, quiet=True)
         return lambda: service_fn(
             project_dir=path, shot_path=shot_path, provider=provider,
-            prompt=build_image_prompt(shot_data), model=stage_config["model"],
+            prompt=build_image_prompt(shot_data, spatial=_effective_spatial(path, shot_id)),
+            model=stage_config["model"],
             reference_paths=references, output_path=path / "04_storyboard" / f"{shot_id}.png",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
@@ -728,7 +749,7 @@ def generate_candidates_cmd(
         shot_data = load_shot(path / "03_shots" / f"{shot_id}.json")
         references = _image_references(path, shot_id, shot_data)
         if prompt is None:
-            prompt = build_image_prompt(shot_data)
+            prompt = build_image_prompt(shot_data, spatial=_effective_spatial(path, shot_id))
     elif prompt is None:
         typer.echo("--prompt is required for character:/env: targets", err=True)
         raise typer.Exit(code=1)

@@ -27,11 +27,28 @@ def _reference_legend(shot: dict) -> str:
     )
 
 
-def build_image_prompt(shot: dict) -> str:
+def _spatial_fragment(spatial: dict | None) -> str:
+    if not spatial:
+        return ""
+    parts = [
+        f"{character} is screen-{values['screen_side']}, facing {values['facing']}"
+        for character, values in spatial.items()
+    ]
+    return (
+        "; ".join(parts)
+        + " — maintain these relative positions unless the shot's action "
+        "explicitly changes them."
+    )
+
+
+def build_image_prompt(shot: dict, spatial: dict | None = None) -> str:
     parts = []
     legend = _reference_legend(shot)
     if legend:
         parts.append(legend)
+    fragment = _spatial_fragment(spatial)
+    if fragment:
+        parts.append(fragment)
     parts.append(shot.get("action", ""))
     visual = shot.get("visual", {})
     if visual.get("style"):

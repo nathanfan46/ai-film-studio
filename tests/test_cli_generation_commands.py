@@ -364,6 +364,155 @@ def test_generate_image_chains_locked_predecessor_last(tmp_path: Path, monkeypat
     ]
 
 
+def test_generate_image_includes_master_reference_between_characters_and_previous(
+    tmp_path: Path, monkeypatch
+):
+    from ai_film.scene_continuity import lock_continuity_master, set_scene_continuity
+
+    project_dir = _init_mock_project(tmp_path)
+    shot1 = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot1["generation"]["image"] = {
+        "status": "completed", "attempts": 1,
+        "artifact": {"path": "04_storyboard/S01_SH01.png", "size_bytes": 4, "sha256": None},
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot1)
+    (project_dir / "04_storyboard").mkdir(parents=True, exist_ok=True)
+    (project_dir / "04_storyboard" / "S01_SH01.png").write_bytes(b"MASTER-IMAGE")
+    set_scene_continuity(project_dir, "S01", "A", "left", "right", master_shot="S01_SH01")
+    lock_continuity_master(project_dir, "S01")
+
+    shot2 = _shot("S01_SH02")
+    shot2["characters"] = [{"name": "A", "reference": "assets/characters/A/reference.png"}]
+    save_shot(project_dir / "03_shots" / "S01_SH02.json", shot2)
+    save_shot(project_dir / "03_shots" / "S01_SH03.json", _shot("S01_SH03"))
+    _approve(project_dir, "S01_SH03")
+
+    provider = _RecordingImageProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-image", "--shot", "S01_SH03", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    # S01_SH03 has no locked predecessor (S01_SH02 was never generated), but the
+    # scene's master reference is still attached — the fixed anchor is independent
+    # of the local previous-shot chain.
+    assert provider.requests[-1].reference_paths == [
+        str(project_dir / "02_scenes" / "S01_master_reference.png")
+    ]
+
+
+def test_generate_image_attaches_master_and_previous_shot_as_distinct_references(
+    tmp_path: Path, monkeypatch
+):
+    """S01_SH02's previous shot (S01_SH01) IS the scene's master shot, but
+    the master reference is a frozen COPY (02_scenes/S01_master_reference.png)
+    while the previous-shot reference is S01_SH01's own live artifact
+    (04_storyboard/S01_SH01.png) — two different paths by construction, so
+    both attach. This is the expected, common case: master and previous
+    are independent anchors and neither replaces the other, even when
+    they happen to originate from the same shot."""
+    from ai_film.scene_continuity import lock_continuity_master, set_scene_continuity
+
+    project_dir = _init_mock_project(tmp_path)
+    shot1 = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot1["generation"]["image"] = {
+        "status": "completed", "attempts": 1,
+        "artifact": {"path": "04_storyboard/S01_SH01.png", "size_bytes": 4, "sha256": None},
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot1)
+    (project_dir / "04_storyboard").mkdir(parents=True, exist_ok=True)
+    (project_dir / "04_storyboard" / "S01_SH01.png").write_bytes(b"MASTER-IMAGE")
+    set_scene_continuity(project_dir, "S01", "A", "left", "right", master_shot="S01_SH01")
+    lock_continuity_master(project_dir, "S01")
+
+    save_shot(project_dir / "03_shots" / "S01_SH02.json", _shot("S01_SH02"))
+    _approve(project_dir, "S01_SH02")
+
+    provider = _RecordingImageProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-image", "--shot", "S01_SH02", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].reference_paths == [
+        str(project_dir / "02_scenes" / "S01_master_reference.png"),
+        str(project_dir / "04_storyboard" / "S01_SH01.png"),
+    ]
+
+
+def test_generate_image_dedup_guard_fires_on_literal_path_equality(tmp_path: Path, monkeypatch):
+    """The frozen-snapshot design means master_reference_image
+    (02_scenes/...) and a previous-shot reference (04_storyboard/...) can
+    never naturally collide — but _image_references' de-dup guard exists
+    to honor the "never send the same image twice" invariant regardless,
+    and must actually work if the two ever do resolve to the same path
+    (e.g. a future change, or a hand-edited continuity file). Force the
+    collision directly against the continuity file to prove the guard
+    branch itself is correct, since the normal CLI flow can't reach it."""
+    from ai_film.scene_continuity import continuity_path
+
+    project_dir = _init_mock_project(tmp_path)
+    shot1 = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot1["generation"]["image"] = {
+        "status": "completed", "attempts": 1,
+        "artifact": {"path": "04_storyboard/S01_SH01.png", "size_bytes": 4, "sha256": None},
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot1)
+    (project_dir / "04_storyboard").mkdir(parents=True, exist_ok=True)
+    (project_dir / "04_storyboard" / "S01_SH01.png").write_bytes(b"IMAGE")
+    save_shot(project_dir / "03_shots" / "S01_SH02.json", _shot("S01_SH02"))
+    _approve(project_dir, "S01_SH02")
+
+    continuity_path(project_dir, "S01").parent.mkdir(parents=True, exist_ok=True)
+    continuity_path(project_dir, "S01").write_text(json.dumps({
+        "scene_id": "S01", "master_shot": "S01_SH01",
+        # Deliberately points at the SAME path previous_shot_image_reference
+        # will resolve for S01_SH02, to force the collision.
+        "master_reference_image": "04_storyboard/S01_SH01.png",
+        "spatial": {}, "transitions": [],
+    }))
+
+    provider = _RecordingImageProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-image", "--shot", "S01_SH02", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].reference_paths == [
+        str(project_dir / "04_storyboard" / "S01_SH01.png"),
+    ]
+
+
+def test_generate_image_never_self_references_the_master_shot(tmp_path: Path, monkeypatch):
+    from ai_film.scene_continuity import set_scene_continuity
+
+    project_dir = _init_mock_project(tmp_path)
+    set_scene_continuity(project_dir, "S01", "A", "left", "right", master_shot="S01_SH01")
+    _approve(project_dir)
+
+    provider = _RecordingImageProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    # S01_SH01 is regenerating itself — it must never be told to reference
+    # its own not-yet-existent master snapshot, and lock-continuity-master
+    # hasn't run yet anyway (master_reference_image is still absent).
+    result = runner.invoke(app, ["generate-image", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].reference_paths == []
+
+
+def test_generate_image_passes_effective_spatial_state_into_prompt(tmp_path: Path, monkeypatch):
+    from ai_film.scene_continuity import set_scene_continuity
+
+    project_dir = _init_mock_project(tmp_path)
+    set_scene_continuity(project_dir, "S01", "Mara Voss", "left", "right")
+    _approve(project_dir)
+
+    provider = _RecordingImageProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-image", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert "Mara Voss is screen-left, facing right" in provider.requests[-1].prompt
+
+
 def test_generate_candidates_shot_target_includes_environment_reference(tmp_path: Path, monkeypatch):
     project_dir = _init_mock_project(tmp_path)
     shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")

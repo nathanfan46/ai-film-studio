@@ -106,3 +106,35 @@ def test_build_video_prompt_unaffected_by_empty_dialogue():
     }
     prompt = build_video_prompt(shot)
     assert "says" not in prompt
+
+
+def test_build_image_prompt_includes_spatial_fragment_when_given():
+    shot = {"action": "they talk", "visual": {}, "camera": {}}
+    spatial = {
+        "Mara Voss": {"screen_side": "left", "facing": "right"},
+        "Doctor": {"screen_side": "right", "facing": "left"},
+    }
+    prompt = build_image_prompt(shot, spatial=spatial)
+    assert "Mara Voss is screen-left, facing right" in prompt
+    assert "Doctor is screen-right, facing left" in prompt
+    assert "maintain these relative positions" in prompt
+
+
+def test_build_image_prompt_omits_spatial_fragment_when_none_or_empty():
+    shot = {"action": "an empty corridor", "visual": {}, "camera": {}}
+    assert "screen-" not in build_image_prompt(shot)
+    assert "screen-" not in build_image_prompt(shot, spatial=None)
+    assert "screen-" not in build_image_prompt(shot, spatial={})
+
+
+def test_build_video_prompt_unaffected_by_spatial_state():
+    """build_video_prompt is explicitly out of scope for this design — it
+    calls build_image_prompt(shot) with no spatial argument, so even a
+    shot with a full spatial canon produces the same video prompt as
+    before this feature existed."""
+    shot = {
+        "action": "they talk", "visual": {}, "camera": {"movement": "static"},
+        "characters": [],
+    }
+    prompt = build_video_prompt(shot)
+    assert "screen-" not in prompt
