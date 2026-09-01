@@ -404,6 +404,15 @@ system rather than a log of whatever the model happened to generate.
   is unchanged from before this design (no fragment, no master reference,
   no error).
 - Reference list de-duplication: when the frozen master-reference image and
-  the previous-shot reference resolve to the same file (e.g. the scene's
-  second shot, whose previous shot is also the master shot), only one copy
-  is attached, not two.
+  the previous-shot reference resolve to the same file, only one copy is
+  attached, not two. **Note:** given the frozen-snapshot design, this
+  literally never happens through normal use — `master_reference_image`
+  always lives under `02_scenes/`, a previous-shot reference always lives
+  under `04_storyboard/` (or wherever the video/image stage writes), so the
+  two paths can't collide by construction; the scene's second shot (whose
+  previous shot is also the master shot) attaches *both* the frozen master
+  copy and the master shot's own live artifact, which is correct, not a
+  duplicate. The de-dup check still belongs in the code as a defensive
+  guard for the literal invariant ("never send the same image twice"), and
+  the test plan should verify that guard directly (by forcing a path
+  collision) rather than expecting the normal flow to exercise it.
