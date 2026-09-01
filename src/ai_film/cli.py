@@ -36,7 +36,7 @@ from ai_film.services.generation_service import (
 )
 from ai_film.audio_fix import apply_audio_offset as apply_audio_offset_service
 from ai_film.video_fix import trim_video as trim_video_service
-from ai_film.video_fix import mux_sfx as mux_sfx_service
+from ai_film.video_fix import mux_audio_track as mux_audio_track_service
 from ai_film.video_diagnostics import diagnose_video as diagnose_video_service
 from ai_film.scene_continuity import (
     add_continuity_transition as add_continuity_transition_service,
@@ -668,24 +668,28 @@ def trim_video_cmd(
     typer.echo(f"{shot}: video trimmed to {end_seconds}s, now at version {stage['version']}")
 
 
-@app.command(name="mux-sfx")
-def mux_sfx_cmd(
+@app.command(name="mux-audio")
+def mux_audio_cmd(
     shot: str = typer.Option(..., "--shot"),
+    track: str = typer.Option(..., "--track", help="voice|sfx"),
     force: bool = typer.Option(False, "--force"),
     path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
 ) -> None:
-    """Mix the shot's already-generated sfx.wav into its current video via
-    ffmpeg — no provider spend. Layers onto any existing dialogue/lipsync
-    audio, never replaces it. Requires generate-sfx to have already run;
-    never generates sfx itself. Scoped to shot-bound event SFX only —
-    never use this for scene ambience or film-level music."""
+    """Mix the shot's already-generated voice or sfx track into its current
+    video via ffmpeg — no provider spend. Layers onto any existing audio,
+    never replaces it. Requires generate-voice/generate-sfx to have
+    already run; never generates the track itself. `--track voice` is for
+    an off-screen speaker's line (no on-screen mouth to lip-sync) — it
+    refuses an on-screen speaker's line, which needs generate-lipsync
+    instead. `--track sfx` is scoped to shot-bound event SFX only — never
+    use this for scene ambience or film-level music."""
     shot_path = path / "03_shots" / f"{shot}.json"
     try:
-        stage = mux_sfx_service(path, shot_path, force=force)
+        stage = mux_audio_track_service(path, shot_path, track, force=force)
     except (ValueError, RuntimeError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
-    typer.echo(f"{shot}: sfx muxed into video, now at version {stage['version']}")
+    typer.echo(f"{shot}: {track} muxed into video, now at version {stage['version']}")
 
 
 @app.command(name="diagnose-video")

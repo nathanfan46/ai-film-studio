@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from ai_film.shot_store import save_shot
-from ai_film.video_fix import mux_sfx, trim_video
+from ai_film.video_fix import mux_audio_track, trim_video
 
 
 def _make_tiny_video(path: Path, duration: float = 3.0, with_audio: bool = False) -> None:
@@ -119,65 +119,122 @@ def test_trim_video_preserves_lipsynced_flag(tmp_path: Path):
     assert stage["artifact"]["lipsynced"] is True
 
 
-def _shot_with_video_and_sfx(
+def _shot_with_video_and_track(
     shot_id: str, video_path: str, video_duration: float,
-    sfx_path: str | None = None, video_extra: dict | None = None,
+    track: str | None = None, track_path: str | None = None,
+    video_extra: dict | None = None, dialogue: dict | None = None, characters: list | None = None,
 ) -> dict:
     shot = _shot_with_completed_video(shot_id, video_path, video_duration, **(video_extra or {}))
-    if sfx_path is not None:
-        shot["generation"]["sfx"] = {
-            "status": "completed", "provider": "fal", "model": "thinksound", "attempts": 1,
-            "artifact": {"path": sfx_path, "size_bytes": 10, "sha256": None, "duration_seconds": 2.0},
+    if track is not None:
+        model = "thinksound" if track == "sfx" else "speech-02-hd"
+        shot["generation"][track] = {
+            "status": "completed", "provider": "fal", "model": model, "attempts": 1,
+            "artifact": {"path": track_path, "size_bytes": 10, "sha256": None, "duration_seconds": 2.0},
         }
+    if dialogue is not None:
+        shot["dialogue"] = dialogue
+    if characters is not None:
+        shot["characters"] = characters
     return shot
 
 
-def test_mux_sfx_rejects_missing_video_artifact(tmp_path: Path):
+def test_mux_audio_track_rejects_unknown_track(tmp_path: Path):
     shot_path = tmp_path / "03_shots" / "S01_SH01.json"
-    shot = _shot_with_video_and_sfx(
-        "S01_SH01", "05_video/S01_SH01.mp4", 4.0, sfx_path="06_audio/sfx/S01_SH01.wav",
+    save_shot(shot_path, _shot_with_video_and_track("S01_SH01", "05_video/S01_SH01.mp4", 4.0))
+    with pytest.raises(ValueError):
+        mux_audio_track(tmp_path, shot_path, "music")
+
+
+def test_mux_audio_track_rejects_missing_video_artifact(tmp_path: Path):
+    shot_path = tmp_path / "03_shots" / "S01_SH01.json"
+    shot = _shot_with_video_and_track(
+        "S01_SH01", "05_video/S01_SH01.mp4", 4.0, track="sfx", track_path="06_audio/sfx/S01_SH01.wav",
     )
     shot["generation"]["video"] = {"status": "pending", "attempts": 0}
     save_shot(shot_path, shot)
     with pytest.raises(ValueError):
-        mux_sfx(tmp_path, shot_path)
+        mux_audio_track(tmp_path, shot_path, "sfx")
 
 
-def test_mux_sfx_rejects_missing_sfx_artifact(tmp_path: Path):
+def test_mux_audio_track_rejects_missing_track_artifact(tmp_path: Path):
     shot_path = tmp_path / "03_shots" / "S01_SH01.json"
-    save_shot(shot_path, _shot_with_video_and_sfx("S01_SH01", "05_video/S01_SH01.mp4", 4.0))
+    save_shot(shot_path, _shot_with_video_and_track("S01_SH01", "05_video/S01_SH01.mp4", 4.0))
     with pytest.raises(ValueError):
-        mux_sfx(tmp_path, shot_path)
+        mux_audio_track(tmp_path, shot_path, "sfx")
 
 
-def test_mux_sfx_raises_when_ffmpeg_missing(tmp_path: Path, monkeypatch):
+def test_mux_audio_track_raises_when_ffmpeg_missing(tmp_path: Path, monkeypatch):
     shot_path = tmp_path / "03_shots" / "S01_SH01.json"
     save_shot(
         shot_path,
-        _shot_with_video_and_sfx(
-            "S01_SH01", "05_video/S01_SH01.mp4", 4.0, sfx_path="06_audio/sfx/S01_SH01.wav",
+        _shot_with_video_and_track(
+            "S01_SH01", "05_video/S01_SH01.mp4", 4.0, track="sfx", track_path="06_audio/sfx/S01_SH01.wav",
         ),
     )
     monkeypatch.setattr("ai_film.video_fix.shutil.which", lambda name: None)
     with pytest.raises(RuntimeError):
-        mux_sfx(tmp_path, shot_path)
+        mux_audio_track(tmp_path, shot_path, "sfx")
 
 
-def test_mux_sfx_rejects_relock_without_force(tmp_path: Path):
+def test_mux_audio_track_rejects_relock_without_force(tmp_path: Path):
     shot_path = tmp_path / "03_shots" / "S01_SH01.json"
     save_shot(
         shot_path,
-        _shot_with_video_and_sfx(
-            "S01_SH01", "05_video/S01_SH01.mp4", 4.0, sfx_path="06_audio/sfx/S01_SH01.wav",
+        _shot_with_video_and_track(
+            "S01_SH01", "05_video/S01_SH01.mp4", 4.0, track="sfx", track_path="06_audio/sfx/S01_SH01.wav",
             video_extra={"sfx_muxed": True},
         ),
     )
     with pytest.raises(ValueError):
-        mux_sfx(tmp_path, shot_path)
+        mux_audio_track(tmp_path, shot_path, "sfx")
+
+
+def test_mux_audio_track_voice_rejects_on_screen_speaker(tmp_path: Path):
+    """The invariant this exists to enforce: raw voice-muxing an on-screen
+    speaker's line would play the audio with no mouth movement to match
+    it — that combination must use generate-lipsync instead."""
+    shot_path = tmp_path / "03_shots" / "S01_SH01.json"
+    save_shot(
+        shot_path,
+        _shot_with_video_and_track(
+            "S01_SH01", "05_video/S01_SH01.mp4", 4.0,
+            track="voice", track_path="06_audio/dialogue/S01_SH01.wav",
+            dialogue={"text": "hello", "speaker": "Mara"},
+            characters=[{"name": "Mara", "reference": "assets/characters/Mara/reference.png"}],
+        ),
+    )
+    with pytest.raises(ValueError):
+        mux_audio_track(tmp_path, shot_path, "voice")
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
-def test_mux_sfx_layers_onto_existing_audio(tmp_path: Path):
+def test_mux_audio_track_voice_allows_off_screen_speaker(tmp_path: Path):
+    """The scenario this whole command was generalized for: a shot shows
+    only a listener, but the dialogue's speaker (a caller) is off screen
+    — the line still needs to be audible, with no lip-sync to anyone."""
+    video_path = tmp_path / "05_video" / "S01_SH01.mp4"
+    _make_tiny_video(video_path, duration=4.0, with_audio=False)
+    voice_path = tmp_path / "06_audio" / "dialogue" / "S01_SH01.wav"
+    _make_tiny_audio(voice_path, duration=2.0)
+    shot_path = tmp_path / "03_shots" / "S01_SH01.json"
+    save_shot(
+        shot_path,
+        _shot_with_video_and_track(
+            "S01_SH01", "05_video/S01_SH01.mp4", 4.0,
+            track="voice", track_path="06_audio/dialogue/S01_SH01.wav",
+            dialogue={"text": "hello", "speaker": "Caller"},
+            characters=[{"name": "Mara", "reference": "assets/characters/Mara/reference.png"}],
+        ),
+    )
+
+    stage = mux_audio_track(tmp_path, shot_path, "voice")
+
+    assert stage["artifact"]["voice_muxed"] is True
+    assert stage["history"][0]["superseded_reason"] == "voice_mux"
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_mux_audio_track_layers_onto_existing_audio(tmp_path: Path):
     video_path = tmp_path / "05_video" / "S01_SH01.mp4"
     _make_tiny_video(video_path, duration=4.0, with_audio=True)
     sfx_path = tmp_path / "06_audio" / "sfx" / "S01_SH01.wav"
@@ -185,12 +242,12 @@ def test_mux_sfx_layers_onto_existing_audio(tmp_path: Path):
     shot_path = tmp_path / "03_shots" / "S01_SH01.json"
     save_shot(
         shot_path,
-        _shot_with_video_and_sfx(
-            "S01_SH01", "05_video/S01_SH01.mp4", 4.0, sfx_path="06_audio/sfx/S01_SH01.wav",
+        _shot_with_video_and_track(
+            "S01_SH01", "05_video/S01_SH01.mp4", 4.0, track="sfx", track_path="06_audio/sfx/S01_SH01.wav",
         ),
     )
 
-    stage = mux_sfx(tmp_path, shot_path)
+    stage = mux_audio_track(tmp_path, shot_path, "sfx")
 
     assert stage["version"] == 2
     assert stage["history"][0]["superseded_reason"] == "sfx_mux"
@@ -213,7 +270,7 @@ def test_mux_sfx_layers_onto_existing_audio(tmp_path: Path):
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
-def test_mux_sfx_attaches_sfx_when_video_silent(tmp_path: Path):
+def test_mux_audio_track_attaches_track_when_video_silent(tmp_path: Path):
     video_path = tmp_path / "05_video" / "S01_SH01.mp4"
     _make_tiny_video(video_path, duration=4.0, with_audio=False)
     sfx_path = tmp_path / "06_audio" / "sfx" / "S01_SH01.wav"
@@ -221,12 +278,12 @@ def test_mux_sfx_attaches_sfx_when_video_silent(tmp_path: Path):
     shot_path = tmp_path / "03_shots" / "S01_SH01.json"
     save_shot(
         shot_path,
-        _shot_with_video_and_sfx(
-            "S01_SH01", "05_video/S01_SH01.mp4", 4.0, sfx_path="06_audio/sfx/S01_SH01.wav",
+        _shot_with_video_and_track(
+            "S01_SH01", "05_video/S01_SH01.mp4", 4.0, track="sfx", track_path="06_audio/sfx/S01_SH01.wav",
         ),
     )
 
-    stage = mux_sfx(tmp_path, shot_path)
+    stage = mux_audio_track(tmp_path, shot_path, "sfx")
 
     new_path = tmp_path / stage["artifact"]["path"]
     probe = subprocess.run(
@@ -238,7 +295,7 @@ def test_mux_sfx_attaches_sfx_when_video_silent(tmp_path: Path):
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
-def test_mux_sfx_force_relocks(tmp_path: Path):
+def test_mux_audio_track_force_relocks(tmp_path: Path):
     video_path = tmp_path / "05_video" / "S01_SH01.mp4"
     _make_tiny_video(video_path, duration=4.0, with_audio=True)
     sfx_path = tmp_path / "06_audio" / "sfx" / "S01_SH01.wav"
@@ -246,13 +303,13 @@ def test_mux_sfx_force_relocks(tmp_path: Path):
     shot_path = tmp_path / "03_shots" / "S01_SH01.json"
     save_shot(
         shot_path,
-        _shot_with_video_and_sfx(
-            "S01_SH01", "05_video/S01_SH01.mp4", 4.0, sfx_path="06_audio/sfx/S01_SH01.wav",
+        _shot_with_video_and_track(
+            "S01_SH01", "05_video/S01_SH01.mp4", 4.0, track="sfx", track_path="06_audio/sfx/S01_SH01.wav",
         ),
     )
-    mux_sfx(tmp_path, shot_path)
+    mux_audio_track(tmp_path, shot_path, "sfx")
 
-    stage = mux_sfx(tmp_path, shot_path, force=True)
+    stage = mux_audio_track(tmp_path, shot_path, "sfx", force=True)
 
     assert stage["version"] == 3
     assert stage["artifact"]["sfx_muxed"] is True
