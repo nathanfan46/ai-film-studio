@@ -101,7 +101,7 @@ ai-film set-scene-continuity --scene S01 --character "Doctor" --screen-side righ
 ai-film add-continuity-transition --scene S01 --after-shot S01_SH03 --character "Mara Voss" --screen-side right --facing left --reason "Mara walks around the Doctor to reach the door."
 ```
 
-This takes effect starting the *next* shot after `S01_SH03`, not at `S01_SH03` itself.
+This takes effect starting the *next* shot after `S01_SH03`, not at `S01_SH03` itself. If more than one character's blocking changes at the same shot, call `add-continuity-transition` once per character with the same `--after-shot` — each call merges into the same transition rather than overwriting it.
 
 ## Step 3: Continuity check
 
@@ -175,13 +175,13 @@ ai-film select-candidate --target shot:<id>:image --id <candidate-id>
 
 This writes the image into that shot's `generation.image.artifact` and marks it completed — the same effect `generate-image` would have, so nothing downstream needs to know it came from the candidate loop. `select-candidate` is re-runnable with a different `--id` if the user changes their mind later — just another `type: selection` round trip.
 
-**If this was the scene's first shot** (`S<SS>_SH01`), immediately run `ai-film lock-continuity-master --scene <SS>` right after locking it, before moving on to the scene's next shot:
+**If this was the scene's first shot** (`S<SS>_SH01`) **and you established a spatial canon for it in Step 2** (i.e. you called `set-scene-continuity` for at least one on-screen character there — a characterless establishing shot has no canon and needs no master reference, so skip this step entirely for that case), immediately run `ai-film lock-continuity-master --scene <SS>` right after locking it, before moving on to the scene's next shot:
 
 ```bash
 ai-film lock-continuity-master --scene S01
 ```
 
-This freezes that shot's just-locked image as the scene's permanent spatial anchor — a one-time snapshot, not something that updates if the shot is ever regenerated later. This is the only point in the whole run where this command is needed; every other shot in the scene generates against the canon `lock-continuity-master` just fixed in place.
+This freezes that shot's just-locked image as the scene's permanent spatial anchor — a one-time snapshot, not something that updates if the shot is ever regenerated later. This is the only point in a scene's shot loop where this command is needed — every other shot in the scene generates against the canon `lock-continuity-master` just fixed in place. If the scene has no canon, there is nothing to lock; simply continue to the scene's next shot as normal.
 
 ## When you're done
 
