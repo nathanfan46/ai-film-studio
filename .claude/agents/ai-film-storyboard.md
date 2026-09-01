@@ -88,9 +88,26 @@ Write one file per shot at `03_shots/S<SS>_SH<NN>.json` (`<SS>` = 2-digit scene 
 
 After writing a scene's shot files, run `ai-film validate` and fix anything it reports before moving on.
 
+**Scene spatial canon, for a scene's first shot only:** when you write the very first shot of a scene (`S<SS>_SH01`), decide each on-screen character's initial blocking — which side of frame they're on and which way they face — before writing that shot's `action` text, so the action can describe the same layout you're about to record. Record it with one `set-scene-continuity` call per on-screen character, plus `--master-shot` on at least one of those calls:
+
+```bash
+ai-film set-scene-continuity --scene S01 --character "Mara Voss" --screen-side left --facing right --master-shot S01_SH01
+ai-film set-scene-continuity --scene S01 --character "Doctor" --screen-side right --facing left
+```
+
+`--screen-side` is one of `left|center|right`, `--facing` is one of `left|right|camera|away`. This is a one-time decision for the scene, not something you redo for every shot — every later shot in the scene inherits it automatically through generation. If a later shot in the same scene needs a deliberate blocking change (a character crosses the room, walks around another), declare it explicitly instead of just writing new `action` text and hoping it reads as consistent:
+
+```bash
+ai-film add-continuity-transition --scene S01 --after-shot S01_SH03 --character "Mara Voss" --screen-side right --facing left --reason "Mara walks around the Doctor to reach the door."
+```
+
+This takes effect starting the *next* shot after `S01_SH03`, not at `S01_SH03` itself.
+
 ## Step 3: Continuity check
 
-For each shot you just wrote (or any shot still at `continuity.status: "pending"`), judge continuity using your own full context of every character bible and every other shot written so far — check things like: does this character's described appearance stay consistent with their bible and with how they appeared in earlier shots' `visual`/`camera` choices; does the scene's geography/lighting stay coherent shot-to-shot. Then run:
+For each shot you just wrote (or any shot still at `continuity.status: "pending"`), judge continuity using your own full context of every character bible and every other shot written so far — check things like: does this character's described appearance stay consistent with their bible and with how they appeared in earlier shots' `visual`/`camera` choices; does the scene's geography/lighting stay coherent shot-to-shot. Additionally, for a shot in a scene that has a spatial canon, run `ai-film show-continuity --shot <id>` before judging, and apply this rule: **a shot's described blocking may differ from the effective spatial state only if a transition already explains the difference by that shot** — otherwise this is a `failed` continuity result, not "probably fine." This check is about **relative spatial relationships and declared facing, not pixel-level framing** — a close-up filling the frame with one character is not a violation of `screen_side: right` just because the other character isn't visible; the canon constrains where a character *would be* if shown, not that every shot must show every character. Composition and shot-size decisions remain your normal judgment call, layered on top of (never contradicting) the canon. If a generated shot's own image looks like it drifted from the canon and no transition explains it, the fix is to regenerate that shot against the existing canon — never to edit the canon to match what got generated; only a deliberate, story-driven blocking decision (via `add-continuity-transition`) is allowed to change what the canon says is true.
+
+Then run:
 
 ```bash
 ai-film check-continuity --shot <id> --status <passed|warning|failed>
@@ -157,6 +174,14 @@ ai-film select-candidate --target shot:<id>:image --id <candidate-id>
 ```
 
 This writes the image into that shot's `generation.image.artifact` and marks it completed — the same effect `generate-image` would have, so nothing downstream needs to know it came from the candidate loop. `select-candidate` is re-runnable with a different `--id` if the user changes their mind later — just another `type: selection` round trip.
+
+**If this was the scene's first shot** (`S<SS>_SH01`), immediately run `ai-film lock-continuity-master --scene <SS>` right after locking it, before moving on to the scene's next shot:
+
+```bash
+ai-film lock-continuity-master --scene S01
+```
+
+This freezes that shot's just-locked image as the scene's permanent spatial anchor — a one-time snapshot, not something that updates if the shot is ever regenerated later. This is the only point in the whole run where this command is needed; every other shot in the scene generates against the canon `lock-continuity-master` just fixed in place.
 
 ## When you're done
 
