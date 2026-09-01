@@ -435,13 +435,16 @@ def generate_sfx(
     provider,
     prompt: str,
     model: str,
+    video_path: str,
     output_path: Path,
     provider_name: str,
     max_attempts: int = 3,
     poll_interval_seconds: float = 0.0,
     force: bool = False,
 ) -> dict:
-    request = SfxGenerationRequest(prompt=prompt, model=model, output_path=str(output_path))
+    request = SfxGenerationRequest(
+        prompt=prompt, model=model, video_path=video_path, output_path=str(output_path),
+    )
     return run_generation_stage(
         project_dir=project_dir, shot_path=shot_path, stage="sfx",
         scope=_SCOPE_BY_STAGE["sfx"],

@@ -98,6 +98,7 @@ class VoiceGenerationRequest:
 class SfxGenerationRequest:
     prompt: str
     model: str
+    video_path: str = ""
     output_path: str = ""
 
 

@@ -257,6 +257,27 @@ def _video_references(path: Path, shot_data: dict) -> list[str]:
     return _character_and_environment_references(path, shot_data)
 
 
+def _base_video_artifact(shot_data: dict) -> dict | None:
+    """The shot's pre-lipsync video artifact. SFX generation must always
+    consume this, never a lipsynced (audio-bearing) artifact — ThinkSound's
+    own behavior mixing with audio already present in a source video is
+    unverified, and SFX must never risk stepping on lip-synced dialogue.
+    The current video artifact IS the base video unless it's been through
+    lipsync (tagged "lipsynced": true, cleared again by any later plain
+    video regeneration — see _lipsync_video_artifact's own docstring), in
+    which case the base version lives in history: the most recent entry
+    that isn't itself tagged lipsynced."""
+    video_stage = shot_data.get("generation", {}).get("video", {})
+    current = video_stage.get("artifact")
+    if current and not current.get("lipsynced"):
+        return current
+    for entry in reversed(video_stage.get("history", [])):
+        artifact = entry.get("artifact")
+        if artifact and not artifact.get("lipsynced"):
+            return artifact
+    return None
+
+
 @app.command(name="generate-image")
 def generate_image_cmd(
     shot: str = typer.Option(..., "--shot"),
@@ -398,12 +419,18 @@ def generate_sfx_cmd(
 ) -> None:
     stage_config, gen_config = _stage_config(path, "sfx")
     shot_path = path / "03_shots" / f"{shot}.json"
+    shot_data = load_shot(shot_path)
+    base_video = _base_video_artifact(shot_data)
+    if not base_video or not base_video.get("path"):
+        typer.echo(f"{shot}: video must be generated before sfx", err=True)
+        raise typer.Exit(code=1)
 
     def _run():
         provider = resolve_provider(Capability.SFX, stage_config["provider"])
         return generate_sfx_service(
             project_dir=path, shot_path=shot_path, provider=provider,
             prompt=prompt, model=stage_config["model"],
+            video_path=str(path / base_video["path"]),
             output_path=path / "06_audio" / "sfx" / f"{shot}.wav",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,

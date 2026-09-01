@@ -19,7 +19,7 @@ DEFAULT_CONFIG = {
         "video": {"provider": "fal", "model": "veo-3", "parameters": {}},
         "voice": {"provider": "fal", "model": "csm-1b", "parameters": {}},
         "sfx": {"provider": "fal", "model": "thinksound", "parameters": {}},
-        "music": {"provider": "fal", "model": "csm-1b", "parameters": {}},
+        "music": {"provider": "fal", "model": "cassetteai-music", "parameters": {}},
         "lipsync": {"provider": "fal", "model": "kling-lipsync", "parameters": {}},
     },
     "generation": {"max_attempts": 3, "max_parallel_jobs": 3, "poll_interval_seconds": 5},

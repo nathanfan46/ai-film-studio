@@ -28,7 +28,10 @@ _MODELS = [
         " $0.10/1000 chars)",
     ),
     ModelInfo("fal", "thinksound", Capability.SFX, "ThinkSound (video-to-audio)"),
-    ModelInfo("fal", "csm-1b", Capability.MUSIC, "CSM-1B (placeholder music backend)"),
+    ModelInfo(
+        "fal", "cassetteai-music", Capability.MUSIC,
+        "CassetteAI Music Generator (instrumental, 10-180s)",
+    ),
     ModelInfo(
         "fal", "kling-lipsync", Capability.LIPSYNC,
         "Kling Lipsync (audio-driven mouth sync on an existing video, $0.014/5s)",

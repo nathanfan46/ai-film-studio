@@ -155,8 +155,31 @@ def test_generate_voice_succeeds_after_approval(tmp_path: Path):
     assert (project_dir / "06_audio" / "dialogue" / "S01_SH01.wav").exists()
 
 
+def test_generate_sfx_blocked_without_a_video(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    _approve(project_dir)
+    result = runner.invoke(
+        app,
+        [
+            "generate-sfx", "--shot", "S01_SH01", "--prompt", "distant thunder rumble",
+            "--path", str(project_dir),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "video must be generated before sfx" in result.output
+
+
 def test_generate_sfx_succeeds_after_approval(tmp_path: Path):
     project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["generation"]["video"] = {
+        "status": "completed", "attempts": 1,
+        "artifact": {
+            "path": "05_video/S01_SH01.mp4", "size_bytes": 10, "sha256": None,
+            "duration_seconds": 4,
+        },
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
     _approve(project_dir)
     result = runner.invoke(
         app,
@@ -168,6 +191,65 @@ def test_generate_sfx_succeeds_after_approval(tmp_path: Path):
     assert result.exit_code == 0
     assert "completed" in result.output
     assert (project_dir / "06_audio" / "sfx" / "S01_SH01.wav").exists()
+
+
+def test_generate_sfx_uses_pre_lipsync_video_when_current_is_lipsynced(tmp_path: Path, monkeypatch):
+    """The invariant: SFX must never consume a lipsynced (audio-bearing)
+    video artifact. When the current video artifact is tagged lipsynced,
+    the base video must be pulled from history instead."""
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["generation"]["video"] = {
+        "status": "completed", "attempts": 1, "version": 2,
+        "history": [
+            {
+                "version": 1, "provider": "fal", "model": "veo-3",
+                "artifact": {
+                    "path": "05_video/history/S01_SH01_v1.mp4", "size_bytes": 10,
+                    "sha256": None, "duration_seconds": 4,
+                },
+                "superseded_at": "2026-01-01T00:00:00+00:00", "superseded_reason": "lipsync",
+            },
+        ],
+        "artifact": {
+            "path": "05_video/S01_SH01.mp4", "size_bytes": 10, "sha256": None,
+            "duration_seconds": 4, "lipsynced": True,
+        },
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _approve(project_dir)
+
+    class _RecordingSfxProvider:
+        def __init__(self):
+            self.requests = []
+
+        def submit_sfx(self, request):
+            self.requests.append(request)
+            return GenerationJob(provider="mock", id=f"job{len(self.requests)}", capability=Capability.SFX)
+
+        def poll(self, job):
+            return JobStatus.COMPLETED
+
+        def get_result(self, job):
+            request = self.requests[-1]
+            Path(request.output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(request.output_path).write_bytes(b"fake")
+            return VideoGenerationResult(artifact_path=request.output_path, size_bytes=4, duration_seconds=2.0)
+
+    provider = _RecordingSfxProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(
+        app,
+        [
+            "generate-sfx", "--shot", "S01_SH01", "--prompt", "distant thunder rumble",
+            "--path", str(project_dir),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].video_path == str(
+        project_dir / "05_video" / "history" / "S01_SH01_v1.mp4"
+    )
 
 
 def test_generate_music_succeeds_after_approval(tmp_path: Path):

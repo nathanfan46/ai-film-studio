@@ -1,5 +1,9 @@
+import shutil
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from ai_film.models import (
     Capability,
@@ -142,6 +146,9 @@ def test_fal_audio_provider_tags_each_submit_with_its_own_capability(
         submit_response("req-sfx"),
         submit_response("req-music"),
     ]
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file", lambda path: "https://cdn.fal.run/video.mp4"
+    )
 
     provider = FalAudioProvider()
 
@@ -152,12 +159,13 @@ def test_fal_audio_provider_tags_each_submit_with_its_own_capability(
     )
     sfx_job = provider.submit_sfx(
         SfxGenerationRequest(
-            prompt="door creak", model="thinksound", output_path=str(tmp_path / "sfx.wav")
+            prompt="door creak", model="thinksound",
+            video_path=str(tmp_path / "shot.mp4"), output_path=str(tmp_path / "sfx.wav"),
         )
     )
     music_job = provider.submit_music(
         MusicGenerationRequest(
-            prompt="tense strings", model="csm-1b", output_path=str(tmp_path / "music.wav")
+            prompt="tense strings", model="cassetteai-music", output_path=str(tmp_path / "music.wav")
         )
     )
 
@@ -620,3 +628,129 @@ def test_video_result_records_the_snapped_duration_not_the_raw_request(
 
     assert result.duration_seconds == 5  # h3-max's floor — what was actually sent and honored
     assert result.duration_seconds != 2.0  # not the raw, pre-snap request value
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_fal_sfx_provider_sends_video_url_and_prompt(mock_requests, tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    submit_response = MagicMock(status_code=200)
+    submit_response.json.return_value = {
+        "request_id": "req-sfx", "status_url": "https://queue.fal.run/status/req-sfx",
+        "response_url": "https://queue.fal.run/result/req-sfx",
+    }
+    mock_requests.post.return_value = submit_response
+    video_path = tmp_path / "shot.mp4"
+    video_path.write_bytes(b"VIDEO-BYTES")
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file", lambda path: "https://cdn.fal.run/shot.mp4"
+    )
+
+    provider = FalAudioProvider()
+    provider.submit_sfx(
+        SfxGenerationRequest(
+            prompt="phone rings", model="thinksound",
+            video_path=str(video_path), output_path=str(tmp_path / "sfx.wav"),
+        )
+    )
+
+    sent_input = mock_requests.post.call_args.kwargs["json"]
+    assert sent_input == {"video_url": "https://cdn.fal.run/shot.mp4", "prompt": "phone rings"}
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_fal_sfx_provider_extracts_audio_and_discards_video(tmp_path: Path, monkeypatch):
+    """The core of the SFX redesign: ThinkSound returns a full video with
+    generated audio baked in, not a standalone audio file — this must
+    extract only the audio track and never let the returned video become
+    or touch this shot's own video artifact."""
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    fake_returned_video = tmp_path / "thinksound_returned.mp4"
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=2:size=64x64:rate=10",
+            "-f", "lavfi", "-i", "anullsrc=r=8000:cl=mono", "-t", "2", "-shortest",
+            str(fake_returned_video),
+        ],
+        check=True, capture_output=True,
+    )
+
+    provider = FalAudioProvider()
+    request = SfxGenerationRequest(
+        prompt="phone rings", model="thinksound",
+        video_path=str(tmp_path / "shot.mp4"), output_path=str(tmp_path / "sfx.wav"),
+    )
+    job_id = "job-sfx-1"
+    provider._jobs[job_id] = ("status-url", "response-url", request, 2.0)
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.result",
+        lambda response_url: {"video": {"url": "https://cdn.fal.run/returned.mp4"}},
+    )
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.download",
+        lambda url, output_path: shutil.copy(fake_returned_video, output_path),
+    )
+
+    from ai_film.models import GenerationJob
+    result = provider.get_result(GenerationJob(provider="fal", id=job_id, capability=Capability.SFX))
+
+    output_path = Path(request.output_path)
+    assert output_path.exists()
+    assert result.artifact_path == str(output_path)
+    assert result.duration_seconds > 0
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+         "-of", "default=noprint_wrappers=1", str(output_path)],
+        capture_output=True, text=True,
+    )
+    assert "codec_type=audio" in probe.stdout
+    assert "codec_type=video" not in probe.stdout
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_fal_music_provider_sends_prompt_and_integer_duration(mock_requests, tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    submit_response = MagicMock(status_code=200)
+    submit_response.json.return_value = {
+        "request_id": "req-music", "status_url": "https://queue.fal.run/status/req-music",
+        "response_url": "https://queue.fal.run/result/req-music",
+    }
+    mock_requests.post.return_value = submit_response
+
+    provider = FalAudioProvider()
+    provider.submit_music(
+        MusicGenerationRequest(
+            prompt="tense strings", model="cassetteai-music", duration_seconds=45.0,
+            output_path=str(tmp_path / "music.wav"),
+        )
+    )
+
+    sent_input = mock_requests.post.call_args.kwargs["json"]
+    assert sent_input == {"prompt": "tense strings", "duration": 45}
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_fal_music_provider_parses_audio_file_field(mock_requests, tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    submit_response = MagicMock(status_code=200)
+    submit_response.json.return_value = {
+        "request_id": "req-music", "status_url": "https://queue.fal.run/status/req-music",
+        "response_url": "https://queue.fal.run/result/req-music",
+    }
+    status_response = MagicMock(status_code=200)
+    status_response.json.return_value = {"status": "COMPLETED"}
+    result_response = MagicMock(status_code=200)
+    result_response.json.return_value = {"audio_file": {"url": "https://cdn.fal.run/music.wav"}}
+    download_response = MagicMock(status_code=200, content=b"MUSIC-BYTES")
+    mock_requests.post.return_value = submit_response
+    mock_requests.get.side_effect = [status_response, result_response, download_response]
+
+    provider = FalAudioProvider()
+    job = provider.submit_music(
+        MusicGenerationRequest(
+            prompt="tense strings", model="cassetteai-music", duration_seconds=45.0,
+            output_path=str(tmp_path / "music.wav"),
+        )
+    )
+    assert provider.poll(job) == JobStatus.COMPLETED
+    result = provider.get_result(job)
+    assert Path(result.artifact_path).read_bytes() == b"MUSIC-BYTES"

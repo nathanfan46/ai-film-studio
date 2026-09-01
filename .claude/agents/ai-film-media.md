@@ -89,7 +89,7 @@ ai-film generate-lipsync --shot SHOT_ID
 | fal/veo-3 (video) | ~$0.50 per generation |
 | fal/csm-1b (voice) | ~$0.02 per generation |
 | fal/kling-lipsync (lipsync) | ~$0.014 per 5s of video, rounded up — so a typical 3-6s shot is one $0.014 increment |
-| fal/csm-1b (music) | ~$0.05 per generation |
+| fal/cassetteai-music (music) | ~$0.035 per generation |
 | fal/thinksound (sfx) | ~$0.02 per generation |
 | mock | $0.00 |
 
@@ -174,7 +174,7 @@ save_shot(path, shot)
 ```
 
   **Don't regenerate yet** — see "Regenerate once per stage" below.
-- **New stage requested** — the complaint explicitly asks for sfx or music where the shot currently has `not_required`. Don't call `generate-sfx`/`generate-music` yet — collect it for the confirmation pass below, even though the existing film-wide approval technically permits the call (the engine's cost gate doesn't distinguish stages, only shot IDs): asking first here is your own policy, not something the engine enforces for you. When you do generate it (Pass 2, below), remember `--prompt` is **required** by both commands — unlike `generate-video`/`generate-voice`, there's no fallback derivation from the shot's fields — and `generate-music` also takes `--duration-seconds` (defaults to 30.0, almost always wrong for a shot; pass the shot's own `duration_seconds` field).
+- **New stage requested** — the complaint explicitly asks for sfx or music where the shot currently has `not_required`. Don't call `generate-sfx`/`generate-music` yet — collect it for the confirmation pass below, even though the existing film-wide approval technically permits the call (the engine's cost gate doesn't distinguish stages, only shot IDs): asking first here is your own policy, not something the engine enforces for you. When you do generate it (Pass 2, below), remember `--prompt` is **required** by both commands — unlike `generate-video`/`generate-voice`, there's no fallback derivation from the shot's fields — and `generate-music` also takes `--duration-seconds` (defaults to 30.0, almost always wrong for a shot; pass the shot's own `duration_seconds` field). `generate-sfx` additionally requires the shot's video to already be generated (it analyzes the shot's own picture to invent a matching sound) — it fails clearly if there's none yet, so generate video first if this comes up on a shot that doesn't have one. It always writes a standalone `06_audio/sfx/<id>.wav`, same shape as voice/music — it never touches or supersedes `generation.video`, lipsynced or not.
 - **Not confidently mappable** — the complaint doesn't clearly fit any of the above. Don't guess — collect it for the clarification pass below.
 
 **Whitelisted field edits** — you may directly edit only these fields; anything else falls into "not confidently mappable" above. For a dialogue shot, `voice` → `video` → `lipsync` is a dependency chain, not three independent stages (voice's measured length drives video's target duration; video's content is what a lip-sync pass syncs against) — editing a field regenerates that field's own stage **and every stage after it in the chain**, even though nothing directly edited those later stages:
