@@ -35,6 +35,8 @@ from ai_film.services.generation_service import (
     generate_voice as generate_voice_service,
 )
 from ai_film.audio_fix import apply_audio_offset as apply_audio_offset_service
+from ai_film.video_fix import trim_video as trim_video_service
+from ai_film.video_diagnostics import diagnose_video as diagnose_video_service
 from ai_film.feedback_store import (
     add_feedback_entry as add_feedback_entry_service,
     resolve_feedback_entry as resolve_feedback_entry_service,
@@ -457,6 +459,51 @@ def apply_audio_offset_cmd(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
     typer.echo(f"{shot}: {track} now at version {stage['version']}")
+
+
+@app.command(name="trim-video")
+def trim_video_cmd(
+    shot: str = typer.Option(..., "--shot"),
+    end_seconds: float = typer.Option(..., "--end-seconds"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+) -> None:
+    """Cut a completed video artifact down to its first `end_seconds` via
+    ffmpeg — no provider spend. Use when a video model's minimum-duration
+    floor leaves trailing dead air past the real dialogue length."""
+    shot_path = path / "03_shots" / f"{shot}.json"
+    try:
+        stage = trim_video_service(path, shot_path, end_seconds)
+    except (ValueError, RuntimeError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"{shot}: video trimmed to {end_seconds}s, now at version {stage['version']}")
+
+
+@app.command(name="diagnose-video")
+def diagnose_video_cmd(
+    shot: str = typer.Option(..., "--shot"),
+    interval_seconds: float = typer.Option(0.5, "--interval-seconds"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+) -> None:
+    """Extract frames from a shot's current video at a fixed interval and
+    report silence windows in its audio track — read the printed frame
+    paths to check by eye whether mouth movement lines up with real audio."""
+    shot_path = path / "03_shots" / f"{shot}.json"
+    try:
+        report = diagnose_video_service(path, shot_path, interval_seconds)
+    except (ValueError, RuntimeError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(
+        f"{shot}: video={report['video_path']} duration={report['duration_seconds']:.2f}s"
+    )
+    if report["silence_windows"] is None:
+        typer.echo("  audio: no audio track")
+    else:
+        for window in report["silence_windows"]:
+            typer.echo(f"  silence: {window['start']:.2f}s - {window['end']:.2f}s")
+    for frame in report["frames"]:
+        typer.echo(f"  frame {frame['t']:.2f}s -> {frame['path']}")
 
 
 @app.command(name="review-media")

@@ -11,7 +11,7 @@ Before anything else, resolve which `ai-film` binary to use, call it `AI_FILM_BI
 
 Every command below is shown as `ai-film ...` for brevity — substitute `AI_FILM_BIN` for the literal word `ai-film` in each one, and every command also takes `--path PROJECT_PATH`, also omitted below but required every time you run one. Every Python snippet below is shown as `python3 ...` for the same reason — substitute `PY_BIN`.
 
-Note: `approve-generation`, `generate-video`, `generate-voice`, `generate-lipsync`, `generate-sfx`, `generate-music`, and `apply-audio-offset` are deliberately *not* pre-authorized in `.claude/settings.json` even when `AI_FILM_BIN` resolves correctly — you'll still see a Bash permission prompt for those every time, on top of (not instead of) the `NEEDS_INPUT`/`HUMAN_RESPONSE` protocol below. That's intentional defense in depth for anything that spends real money or writes files; it's not a bug.
+Note: `approve-generation`, `generate-video`, `generate-voice`, `generate-lipsync`, `generate-sfx`, `generate-music`, `apply-audio-offset`, and `trim-video` are deliberately *not* pre-authorized in `.claude/settings.json` even when `AI_FILM_BIN` resolves correctly — you'll still see a Bash permission prompt for those every time, on top of (not instead of) the `NEEDS_INPUT`/`HUMAN_RESPONSE` protocol below. That's intentional defense in depth for anything that spends real money or overwrites an artifact; it's not a bug. `diagnose-video` is pre-authorized like `review-media` — it only extracts frames to a diagnostics folder and reports silence windows, it never touches `shot.json` or any generation artifact.
 
 ## The human-in-the-loop protocol (read this before Step 1)
 
@@ -118,7 +118,9 @@ If a `generate-video`/`generate-voice`/`generate-lipsync` call fails with any ot
 ai-film review-media --shot SHOT_ID
 ```
 
-**Hard rule, not a style preference: you MUST NOT claim to have visually or audibly evaluated media you cannot directly perceive.** You can inspect: the `review-media` HTML's structure and text content via Read, artifact durations and version/history metadata from `shot.json`, and any waveform PNGs the review page generated (also via Read — your Read tool does display image content, the same capability you rely on for storyboard images elsewhere in this project, so a waveform PNG is genuinely inspectable; the actual video/audio media files are not).
+**Hard rule, not a style preference: you MUST NOT claim to have visually or audibly evaluated media you cannot directly perceive.** You can inspect: the `review-media` HTML's structure and text content via Read, artifact durations and version/history metadata from `shot.json`, any waveform PNGs the review page generated, and individual video frames extracted by `ai-film diagnose-video --shot SHOT_ID` (all via Read — your Read tool does display image content, the same capability you rely on for storyboard images elsewhere in this project, so a waveform PNG or an extracted frame is genuinely inspectable; the video/audio *media files themselves* — anything you'd need to press play to judge, like whether spoken audio sounds natural — are not).
+
+For a dialogue shot, it's worth running `ai-film diagnose-video --shot SHOT_ID` before you ask your open-ended question, not only after a complaint: it prints the video's real duration, its audio track's silence windows, and the frame paths it extracted. Read two or three frames — one inside a reported silence window, one right after the dialogue's real speech ends (per the silence windows, not the shot's nominal `duration_seconds`) — and check by eye whether the mouth is closed there. This catches the "stray movement in dead air" failure mode (see Pass 1 below) before the human has to spot it in the browser themselves; it does not replace asking them, since plenty of complaints (whether a performance reads as the right emotion, whether spoken audio sounds right) are outside what a still frame or a silence window can tell you.
 
 Phrase your question around what you actually know, never around a fabricated impression. Correct: *"I've generated this shot — shot.json shows a 6.0s video and a 3.2s voice track. What do you think?"* (both numbers come from the artifacts' `duration_seconds` fields in `shot.json`, not from the review page — the review page renders the video with ruler ticks but doesn't display a numeric audio duration). Wrong: *"The voice sounds too fast."* — you cannot know this.
 
@@ -145,6 +147,19 @@ ai-film apply-audio-offset --shot SHOT_ID --track <voice|sfx|music> --offset-ms 
 ```
 
   Positive `--offset-ms` delays the track (fixes "starts too early"); negative advances it (fixes "starts too late"). Don't call `resolve-feedback` yet — see "Resolve and rebuild" below.
+- **Stray movement / dead air** — a complaint about mouth movement, a gesture, or any performance beat *after* the spoken line ends. This happens when a video model has a hard minimum-duration floor longer than the shot's real dialogue (e.g. hailuo-2.3's 6s floor on a 1s line) — the model fills the leftover dead air with its own unscripted performance, unrelated to the actual audio. Verify before fixing, don't just trust the complaint's timestamp:
+
+```bash
+ai-film diagnose-video --shot SHOT_ID
+```
+
+  Read a couple of the frame paths it prints — one from inside the last reported silence window — to confirm where the stray movement actually starts (you're looking at real frames here, this is direct perception, not a claim about audio). Then cut the video before that point, leaving a small buffer past the real dialogue (the voice artifact's own `duration_seconds` from `shot.json`, plus roughly half a second):
+
+```bash
+ai-film trim-video --shot SHOT_ID --end-seconds <buffer-padded voice duration, less than the current video's duration_seconds, and before the stray movement's confirmed onset>
+```
+
+  Don't call `resolve-feedback` yet — see "Resolve and rebuild" below. `trim-video` uses the same archive/version/history bookkeeping as every other video regeneration and preserves the `lipsynced` tag if the artifact had one, so nothing downstream needs to know the fix happened this way rather than through a fresh generation.
 - **Field edit** — the complaint maps confidently to one of the whitelisted `shot.json` fields (table below). Edit the field now using `PY_BIN` (this reuses the real engine's `save_shot`, which re-validates and recomputes the shot's derived status — never hand-edit the JSON file directly with a raw write, since that would bypass validation and leave `status` stale):
 
 ```bash

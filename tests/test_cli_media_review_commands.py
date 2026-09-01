@@ -106,6 +106,29 @@ def test_apply_audio_offset_rejects_stage_without_artifact(tmp_path: Path):
     assert result.exit_code == 1
 
 
+def test_trim_video_rejects_stage_without_artifact(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", _shot("S01_SH01"))
+    result = runner.invoke(
+        app,
+        [
+            "trim-video", "--shot", "S01_SH01",
+            "--end-seconds", "2.0", "--path", str(project_dir),
+        ],
+    )
+    assert result.exit_code == 1
+
+
+def test_diagnose_video_rejects_stage_without_artifact(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", _shot("S01_SH01"))
+    result = runner.invoke(
+        app,
+        ["diagnose-video", "--shot", "S01_SH01", "--path", str(project_dir)],
+    )
+    assert result.exit_code == 1
+
+
 def test_review_media_builds_and_opens_page(tmp_path: Path, monkeypatch):
     project_dir = _init_mock_project(tmp_path)
     save_shot(project_dir / "03_shots" / "S01_SH01.json", _shot("S01_SH01"))
