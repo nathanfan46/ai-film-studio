@@ -128,6 +128,11 @@ def add_continuity_transition(
 
 
 def lock_continuity_master(project_dir: Path, scene_id: str, force: bool = False) -> dict:
+    """Lock the master shot's image as a frozen reference — copies it to a new
+    permanent path rather than just storing the master shot's own artifact path.
+    This ensures the continuity anchor never drifts if the master shot is
+    regenerated later; a live pointer would silently break the whole continuity
+    design."""
     data = load_continuity(project_dir, scene_id)
     master_shot = data.get("master_shot")
     if not master_shot:
