@@ -37,6 +37,14 @@ from ai_film.services.generation_service import (
 from ai_film.audio_fix import apply_audio_offset as apply_audio_offset_service
 from ai_film.video_fix import trim_video as trim_video_service
 from ai_film.video_diagnostics import diagnose_video as diagnose_video_service
+from ai_film.scene_continuity import (
+    add_continuity_transition as add_continuity_transition_service,
+    effective_spatial_state,
+    load_continuity,
+    lock_continuity_master as lock_continuity_master_service,
+    scene_id_for_shot,
+    set_scene_continuity as set_scene_continuity_service,
+)
 from ai_film.feedback_store import (
     add_feedback_entry as add_feedback_entry_service,
     resolve_feedback_entry as resolve_feedback_entry_service,
@@ -387,6 +395,97 @@ def check_continuity_cmd(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
     typer.echo(f"{shot}: continuity {status}")
+
+
+@app.command(name="set-scene-continuity")
+def set_scene_continuity_cmd(
+    scene: str = typer.Option(..., "--scene"),
+    character: str = typer.Option(..., "--character"),
+    screen_side: str = typer.Option(..., "--screen-side", help="left|center|right"),
+    facing: str = typer.Option(..., "--facing", help="left|right|camera|away"),
+    master_shot: str = typer.Option(None, "--master-shot"),
+    force: bool = typer.Option(False, "--force"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+) -> None:
+    """Set one character's initial screen_side/facing in a scene's spatial
+    canon. Fails on a conflicting re-set unless --force — never silently
+    overwrites an established state."""
+    try:
+        set_scene_continuity_service(
+            path, scene, character, screen_side, facing,
+            master_shot=master_shot, force=force,
+        )
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"{scene}: {character} set to screen_side={screen_side} facing={facing}")
+
+
+@app.command(name="add-continuity-transition")
+def add_continuity_transition_cmd(
+    scene: str = typer.Option(..., "--scene"),
+    after_shot: str = typer.Option(..., "--after-shot"),
+    character: str = typer.Option(..., "--character"),
+    screen_side: str = typer.Option(..., "--screen-side"),
+    facing: str = typer.Option(..., "--facing"),
+    reason: str = typer.Option(..., "--reason"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+) -> None:
+    """Declare (or extend) an explicit blocking change for a scene, taking
+    effect starting the shot immediately after --after-shot."""
+    try:
+        add_continuity_transition_service(
+            path, scene, after_shot, character, screen_side, facing, reason,
+        )
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(
+        f"{scene}: transition after {after_shot} — {character} -> "
+        f"screen_side={screen_side} facing={facing}"
+    )
+
+
+@app.command(name="lock-continuity-master")
+def lock_continuity_master_cmd(
+    scene: str = typer.Option(..., "--scene"),
+    force: bool = typer.Option(False, "--force"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+) -> None:
+    """Freeze the scene's master_shot's current locked image as the scene's
+    permanent master reference — a one-time snapshot, never live-tracked."""
+    try:
+        data = lock_continuity_master_service(path, scene, force=force)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"{scene}: master reference locked at {data['master_reference_image']}")
+
+
+@app.command(name="show-continuity")
+def show_continuity_cmd(
+    shot: str = typer.Option(..., "--shot"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+) -> None:
+    """Print the effective spatial state (screen_side/facing per
+    character) for a shot, folding in every transition that applies by
+    that shot."""
+    scene_id = scene_id_for_shot(shot)
+    if scene_id is None:
+        typer.echo(f"{shot}: doesn't match the S<SS>_SH<NN> shot-id convention", err=True)
+        raise typer.Exit(code=1)
+    continuity = load_continuity(path, scene_id)
+    if not continuity.get("spatial") and not continuity.get("transitions"):
+        typer.echo(f"{shot}: no continuity file for scene {scene_id}")
+        return
+    state = effective_spatial_state(continuity, shot)
+    if not state:
+        typer.echo(f"{shot}: continuity file exists but no characters have a recorded state yet")
+        return
+    for character, values in state.items():
+        typer.echo(
+            f"{character}: screen_side={values['screen_side']} facing={values['facing']}"
+        )
 
 
 @app.command(name="approve-generation")

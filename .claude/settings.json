@@ -12,6 +12,10 @@
       "Bash(ai-film select-candidate *)",
       "Bash(ai-film review-media *)",
       "Bash(ai-film diagnose-video *)",
+      "Bash(ai-film set-scene-continuity *)",
+      "Bash(ai-film lock-continuity-master *)",
+      "Bash(ai-film add-continuity-transition *)",
+      "Bash(ai-film show-continuity *)",
       "Bash(ai-film add-feedback *)",
       "Bash(ai-film resolve-feedback *)",
       "Bash(./.venv/bin/ai-film init *)",
@@ -24,6 +28,10 @@
       "Bash(./.venv/bin/ai-film select-candidate *)",
       "Bash(./.venv/bin/ai-film review-media *)",
       "Bash(./.venv/bin/ai-film diagnose-video *)",
+      "Bash(./.venv/bin/ai-film set-scene-continuity *)",
+      "Bash(./.venv/bin/ai-film lock-continuity-master *)",
+      "Bash(./.venv/bin/ai-film add-continuity-transition *)",
+      "Bash(./.venv/bin/ai-film show-continuity *)",
       "Bash(./.venv/bin/ai-film add-feedback *)",
       "Bash(./.venv/bin/ai-film resolve-feedback *)"
     ]
