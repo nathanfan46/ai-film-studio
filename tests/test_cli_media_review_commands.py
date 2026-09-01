@@ -119,6 +119,16 @@ def test_trim_video_rejects_stage_without_artifact(tmp_path: Path):
     assert result.exit_code == 1
 
 
+def test_mux_sfx_rejects_stage_without_sfx_artifact(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", _shot("S01_SH01"))
+    result = runner.invoke(
+        app,
+        ["mux-sfx", "--shot", "S01_SH01", "--path", str(project_dir)],
+    )
+    assert result.exit_code == 1
+
+
 def test_diagnose_video_rejects_stage_without_artifact(tmp_path: Path):
     project_dir = _init_mock_project(tmp_path)
     save_shot(project_dir / "03_shots" / "S01_SH01.json", _shot("S01_SH01"))
