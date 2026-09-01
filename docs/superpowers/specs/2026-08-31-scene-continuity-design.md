@@ -61,6 +61,11 @@ agent-consumed data, not an engine-validated pipeline artifact like
 
 **Storage:** `02_scenes/SC<NN>.continuity.json`, sibling to `SC<NN>.md`.
 Absence is a valid, non-error state (see "Absent/partial canon" below).
+Note: the on-disk key is actually the shot-id-style scene prefix (`S<NN>`,
+e.g. `S01`) that `scene_id_for_shot` derives from a shot id — not the
+`SC<NN>` form the scene markdown files use — so files really land at
+`02_scenes/S01.continuity.json`. This keeps the lookup key consistent with
+shot-id parsing throughout `scene_continuity.py`.
 
 **Shape:**
 

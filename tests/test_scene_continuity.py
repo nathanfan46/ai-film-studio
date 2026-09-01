@@ -299,6 +299,26 @@ def test_lock_continuity_master_snapshots_the_artifact(tmp_path: Path):
     assert snapshot_path.read_bytes() == b"ORIGINAL-IMAGE"
 
 
+@pytest.mark.parametrize("bad_scene_id", ["SC01", "not-a-scene"])
+def test_set_scene_continuity_rejects_malformed_scene_id(tmp_path: Path, bad_scene_id: str):
+    with pytest.raises(ValueError):
+        set_scene_continuity(tmp_path, bad_scene_id, "Mara Voss", "left", "right")
+
+
+@pytest.mark.parametrize("bad_scene_id", ["SC01", "not-a-scene"])
+def test_add_continuity_transition_rejects_malformed_scene_id(tmp_path: Path, bad_scene_id: str):
+    with pytest.raises(ValueError):
+        add_continuity_transition(
+            tmp_path, bad_scene_id, "S01_SH03", "Mara Voss", "right", "left", "walks around",
+        )
+
+
+@pytest.mark.parametrize("bad_scene_id", ["SC01", "not-a-scene"])
+def test_lock_continuity_master_rejects_malformed_scene_id(tmp_path: Path, bad_scene_id: str):
+    with pytest.raises(ValueError):
+        lock_continuity_master(tmp_path, bad_scene_id)
+
+
 def test_lock_continuity_master_rejects_relock_without_force(tmp_path: Path):
     set_scene_continuity(tmp_path, "S01", "A", "left", "right", master_shot="S01_SH01")
     image_path = tmp_path / "04_storyboard" / "S01_SH01.png"

@@ -13,6 +13,7 @@ VALID_SCREEN_SIDES = ("left", "center", "right")
 VALID_FACINGS = ("left", "right", "camera", "away")
 
 _SHOT_ID_RE = re.compile(r"^(S\d+)_SH(\d+)$")
+_SCENE_ID_RE = re.compile(r"^S\d+$")
 
 
 def scene_id_for_shot(shot_id: str) -> str | None:
@@ -61,6 +62,11 @@ def _validate_state(screen_side: str, facing: str) -> None:
         raise ValueError(f"facing must be one of {VALID_FACINGS}, got {facing!r}")
 
 
+def _validate_scene_id(scene_id: str) -> None:
+    if not _SCENE_ID_RE.match(scene_id):
+        raise ValueError(f"scene_id must match S<NN> (e.g. 'S01'), got {scene_id!r}")
+
+
 def set_scene_continuity(
     project_dir: Path,
     scene_id: str,
@@ -70,6 +76,7 @@ def set_scene_continuity(
     master_shot: str | None = None,
     force: bool = False,
 ) -> dict:
+    _validate_scene_id(scene_id)
     _validate_state(screen_side, facing)
     if master_shot is not None and scene_id_for_shot(master_shot) != scene_id:
         raise ValueError(f"master_shot {master_shot!r} does not belong to scene {scene_id!r}")
@@ -106,6 +113,7 @@ def add_continuity_transition(
     facing: str,
     reason: str,
 ) -> dict:
+    _validate_scene_id(scene_id)
     _validate_state(screen_side, facing)
     if scene_id_for_shot(after_shot) != scene_id:
         raise ValueError(f"after_shot {after_shot!r} does not belong to scene {scene_id!r}")
@@ -133,6 +141,7 @@ def lock_continuity_master(project_dir: Path, scene_id: str, force: bool = False
     This ensures the continuity anchor never drifts if the master shot is
     regenerated later; a live pointer would silently break the whole continuity
     design."""
+    _validate_scene_id(scene_id)
     data = load_continuity(project_dir, scene_id)
     master_shot = data.get("master_shot")
     if not master_shot:
