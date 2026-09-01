@@ -175,7 +175,7 @@ ai-film select-candidate --target shot:<id>:image --id <candidate-id>
 
 This writes the image into that shot's `generation.image.artifact` and marks it completed — the same effect `generate-image` would have, so nothing downstream needs to know it came from the candidate loop. `select-candidate` is re-runnable with a different `--id` if the user changes their mind later — just another `type: selection` round trip.
 
-**If this was the scene's first shot** (`S<SS>_SH01`) **and you established a spatial canon for it in Step 2** (i.e. you called `set-scene-continuity` for at least one on-screen character there — a characterless establishing shot has no canon and needs no master reference, so skip this step entirely for that case), immediately run `ai-film lock-continuity-master --scene <SS>` right after locking it, before moving on to the scene's next shot:
+**If this was the scene's first shot** (`S<SS>_SH01`) **and you established a spatial canon for it in Step 2** (i.e. you called `set-scene-continuity` for at least one on-screen character there — a characterless establishing shot has no canon and needs no master reference, so skip this step entirely for that case), immediately run `ai-film lock-continuity-master --scene S<SS>` right after locking it, before moving on to the scene's next shot:
 
 ```bash
 ai-film lock-continuity-master --scene S01
