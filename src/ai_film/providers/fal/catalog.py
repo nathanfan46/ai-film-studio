@@ -22,6 +22,11 @@ _MODELS = [
         " then $0.05-0.08/s)",
     ),
     ModelInfo("fal", "csm-1b", Capability.VOICE, "CSM-1B conversational speech"),
+    ModelInfo(
+        "fal", "speech-02-hd", Capability.VOICE,
+        "MiniMax Speech-02 HD (named voice presets, emotion/speed/pitch control,"
+        " $0.10/1000 chars)",
+    ),
     ModelInfo("fal", "thinksound", Capability.SFX, "ThinkSound (video-to-audio)"),
     ModelInfo("fal", "csm-1b", Capability.MUSIC, "CSM-1B (placeholder music backend)"),
     ModelInfo(

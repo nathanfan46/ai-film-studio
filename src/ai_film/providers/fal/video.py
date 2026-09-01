@@ -59,6 +59,18 @@ _NO_DURATION_FIELD_MODELS = {"hailuo-2.3-fast"}
 # turned off at the source for these models.
 MODELS_WITH_AUTO_AUDIO = {"veo-3"}
 
+# Some models (observed on a hailuo-2.3 base video, S01_SH03) burn a
+# subtitle-style on-screen caption of the spoken line into the frame, with
+# timing that doesn't reliably match the actual voice track once combined
+# via lipsync. No model documents a dedicated "captions off" field, so this
+# is suppressed via prompt text — the one lever every text-to-video model
+# accepts. Models with a documented negative_prompt field also get it set
+# there for a stronger signal.
+_CAPTION_SUPPRESSION_CLAUSE = (
+    " No on-screen text, no captions, no subtitles, no burned-in text overlays."
+)
+MODELS_WITH_NEGATIVE_PROMPT = {"veo-3"}
+
 
 def _snap_duration(model: str, duration_seconds: float) -> int:
     allowed = MODEL_ALLOWED_DURATIONS.get(model)
@@ -81,7 +93,12 @@ class FalVideoProvider:
         self._jobs: dict[str, tuple[str, str, VideoGenerationRequest]] = {}
 
     def submit(self, request: VideoGenerationRequest) -> GenerationJob:
-        input_data = {"prompt": request.prompt}
+        prompt = request.prompt
+        if request.suppress_captions:
+            prompt += _CAPTION_SUPPRESSION_CLAUSE
+        input_data = {"prompt": prompt}
+        if request.suppress_captions and request.model in MODELS_WITH_NEGATIVE_PROMPT:
+            input_data["negative_prompt"] = "on-screen text, captions, subtitles"
         if request.model not in _NO_DURATION_FIELD_MODELS:
             input_data["duration"] = _duration_field(request.model, request.duration_seconds)
         if request.model == "h3-max":

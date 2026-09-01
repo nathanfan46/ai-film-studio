@@ -65,6 +65,7 @@ class VideoGenerationRequest:
     reference_paths: list[str] = field(default_factory=list)
     duration_seconds: float = 5.0
     output_path: str = ""
+    suppress_captions: bool = True
 
 
 @dataclass
@@ -90,6 +91,7 @@ class VoiceGenerationRequest:
     speaker: str = ""
     output_path: str = ""
     speaker_id: int | None = None
+    voice_preset: str | None = None
 
 
 @dataclass

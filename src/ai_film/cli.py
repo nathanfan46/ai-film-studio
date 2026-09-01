@@ -249,6 +249,7 @@ def generate_video_cmd(
             output_path=path / "05_video" / f"{shot}.mp4",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
+            suppress_captions=not stage_config.get("parameters", {}).get("captions", False),
         )
 
     _run_generation(shot, "video", _run)
@@ -521,6 +522,7 @@ def _build_stage_call(path: Path, shot_id: str, stage: str, force: bool):
             output_path=path / "05_video" / f"{shot_id}.mp4",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
+            suppress_captions=not stage_config.get("parameters", {}).get("captions", False),
         )
     dialogue = shot_data.get("dialogue", {})
     return lambda: service_fn(
