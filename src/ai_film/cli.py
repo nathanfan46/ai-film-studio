@@ -189,11 +189,13 @@ def _image_references(
     return references
 
 
-def _effective_spatial(path: Path, shot_id: str) -> dict:
+def _effective_spatial(path: Path, shot_id: str, shot_data: dict) -> dict:
     scene_id = scene_id_for_shot(shot_id)
     if scene_id is None:
         return {}
-    return effective_spatial_state(load_continuity(path, scene_id), shot_id)
+    full_state = effective_spatial_state(load_continuity(path, scene_id), shot_id)
+    shot_characters = {c["name"] for c in shot_data.get("characters", [])}
+    return {name: values for name, values in full_state.items() if name in shot_characters}
 
 
 def _speaker_voice_id(path: Path, speaker: str) -> int | None:
@@ -231,7 +233,7 @@ def generate_image_cmd(
         provider = resolve_provider(Capability.IMAGE, stage_config["provider"])
         return generate_image_service(
             project_dir=path, shot_path=shot_path, provider=provider,
-            prompt=build_image_prompt(shot_data, spatial=_effective_spatial(path, shot)),
+            prompt=build_image_prompt(shot_data, spatial=_effective_spatial(path, shot, shot_data)),
             model=stage_config["model"],
             reference_paths=references, output_path=path / "04_storyboard" / f"{shot}.png",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
@@ -674,7 +676,9 @@ def _build_stage_call(path: Path, shot_id: str, stage: str, force: bool):
         references = _image_references(path, shot_id, shot_data, quiet=True)
         return lambda: service_fn(
             project_dir=path, shot_path=shot_path, provider=provider,
-            prompt=build_image_prompt(shot_data, spatial=_effective_spatial(path, shot_id)),
+            prompt=build_image_prompt(
+                shot_data, spatial=_effective_spatial(path, shot_id, shot_data),
+            ),
             model=stage_config["model"],
             reference_paths=references, output_path=path / "04_storyboard" / f"{shot_id}.png",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
@@ -749,7 +753,9 @@ def generate_candidates_cmd(
         shot_data = load_shot(path / "03_shots" / f"{shot_id}.json")
         references = _image_references(path, shot_id, shot_data)
         if prompt is None:
-            prompt = build_image_prompt(shot_data, spatial=_effective_spatial(path, shot_id))
+            prompt = build_image_prompt(
+                shot_data, spatial=_effective_spatial(path, shot_id, shot_data),
+            )
     elif prompt is None:
         typer.echo("--prompt is required for character:/env: targets", err=True)
         raise typer.Exit(code=1)

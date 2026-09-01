@@ -384,7 +384,14 @@ def test_generate_image_includes_master_reference_between_characters_and_previou
     shot2 = _shot("S01_SH02")
     shot2["characters"] = [{"name": "A", "reference": "assets/characters/A/reference.png"}]
     save_shot(project_dir / "03_shots" / "S01_SH02.json", shot2)
-    save_shot(project_dir / "03_shots" / "S01_SH03.json", _shot("S01_SH03"))
+
+    shot3 = _shot("S01_SH03")
+    shot3["environment"] = {
+        "name": "hospital_corridor",
+        "reference": "assets/environments/hospital_corridor/reference.png",
+    }
+    shot3["characters"] = [{"name": "A", "reference": "assets/characters/A/reference.png"}]
+    save_shot(project_dir / "03_shots" / "S01_SH03.json", shot3)
     _approve(project_dir, "S01_SH03")
 
     provider = _RecordingImageProvider()
@@ -392,11 +399,14 @@ def test_generate_image_includes_master_reference_between_characters_and_previou
 
     result = runner.invoke(app, ["generate-image", "--shot", "S01_SH03", "--path", str(project_dir)])
     assert result.exit_code == 0, result.output
-    # S01_SH03 has no locked predecessor (S01_SH02 was never generated), but the
-    # scene's master reference is still attached — the fixed anchor is independent
-    # of the local previous-shot chain.
+    # S01_SH03 has no locked predecessor (S01_SH02 was never generated), so the
+    # previous-shot reference is absent — but the full ordering of what IS
+    # present must still hold: environment reference, then character
+    # reference(s), then the scene's fixed master reference last.
     assert provider.requests[-1].reference_paths == [
-        str(project_dir / "02_scenes" / "S01_master_reference.png")
+        str(project_dir / "assets/environments/hospital_corridor/reference.png"),
+        str(project_dir / "assets/characters/A/reference.png"),
+        str(project_dir / "02_scenes" / "S01_master_reference.png"),
     ]
 
 
@@ -519,6 +529,9 @@ def test_generate_image_passes_effective_spatial_state_into_prompt(tmp_path: Pat
     from ai_film.scene_continuity import set_scene_continuity
 
     project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["characters"] = [{"name": "Mara Voss", "reference": "assets/characters/Mara Voss/reference.png"}]
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
     set_scene_continuity(project_dir, "S01", "Mara Voss", "left", "right")
     _approve(project_dir)
 
@@ -528,6 +541,32 @@ def test_generate_image_passes_effective_spatial_state_into_prompt(tmp_path: Pat
     result = runner.invoke(app, ["generate-image", "--shot", "S01_SH01", "--path", str(project_dir)])
     assert result.exit_code == 0, result.output
     assert "Mara Voss is screen-left, facing right" in provider.requests[-1].prompt
+
+
+def test_generate_image_filters_spatial_state_to_shots_own_characters(tmp_path: Path, monkeypatch):
+    """Finding 3: a shot only lists the characters actually on screen, so the
+    spatial-canon prompt fragment must not force off-screen characters (whom
+    the scene has a recorded position for but this shot doesn't show) into
+    the prompt — that would actively instruct the image model to draw them
+    into a shot that shouldn't contain them."""
+    from ai_film.scene_continuity import set_scene_continuity
+
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["characters"] = [{"name": "Mara Voss", "reference": "assets/characters/Mara Voss/reference.png"}]
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    set_scene_continuity(project_dir, "S01", "Mara Voss", "left", "right")
+    set_scene_continuity(project_dir, "S01", "Doctor", "right", "left")
+    _approve(project_dir)
+
+    provider = _RecordingImageProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-image", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    prompt = provider.requests[-1].prompt
+    assert "Mara Voss is screen-left, facing right" in prompt
+    assert "Doctor" not in prompt
 
 
 def test_generate_candidates_shot_target_includes_environment_reference(tmp_path: Path, monkeypatch):
