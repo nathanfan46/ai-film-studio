@@ -481,19 +481,36 @@ def test_generate_image_dedup_guard_fires_on_literal_path_equality(tmp_path: Pat
 
 
 def test_generate_image_never_self_references_the_master_shot(tmp_path: Path, monkeypatch):
-    from ai_film.scene_continuity import set_scene_continuity
+    """Regression coverage for the guard's truthy-master_ref branch: unlike
+    an unlocked scene (where master_reference_image is absent and the `and`
+    short-circuits before the self-shot comparison ever runs), this locks a
+    real master reference first, so the assertion below can only pass if
+    `continuity.get("master_shot") != shot_id` genuinely evaluates and
+    blocks — not because there was never anything to block."""
+    from ai_film.scene_continuity import lock_continuity_master, set_scene_continuity
 
     project_dir = _init_mock_project(tmp_path)
+    shot1 = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot1["generation"]["image"] = {
+        "status": "completed", "attempts": 1,
+        "artifact": {"path": "04_storyboard/S01_SH01.png", "size_bytes": 4, "sha256": None},
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot1)
+    (project_dir / "04_storyboard").mkdir(parents=True, exist_ok=True)
+    (project_dir / "04_storyboard" / "S01_SH01.png").write_bytes(b"MASTER-IMAGE")
     set_scene_continuity(project_dir, "S01", "A", "left", "right", master_shot="S01_SH01")
+    lock_continuity_master(project_dir, "S01")
     _approve(project_dir)
 
     provider = _RecordingImageProvider()
     monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
 
-    # S01_SH01 is regenerating itself — it must never be told to reference
-    # its own not-yet-existent master snapshot, and lock-continuity-master
-    # hasn't run yet anyway (master_reference_image is still absent).
-    result = runner.invoke(app, ["generate-image", "--shot", "S01_SH01", "--path", str(project_dir)])
+    # S01_SH01 is the scene's master shot, and master_reference_image is now
+    # genuinely locked (truthy) — regenerating S01_SH01 itself (--force, since
+    # it's already "completed") must still never reference its own snapshot.
+    result = runner.invoke(
+        app, ["generate-image", "--shot", "S01_SH01", "--path", str(project_dir), "--force"]
+    )
     assert result.exit_code == 0, result.output
     assert provider.requests[-1].reference_paths == []
 
