@@ -67,6 +67,7 @@ Absence is a valid, non-error state (see "Absent/partial canon" below).
 ```json
 {
   "master_shot": "S01_SH01",
+  "master_reference_image": "02_scenes/SC01_master_reference.png",
   "spatial": {
     "Mara Voss": {"screen_side": "left", "facing": "right"},
     "Doctor": {"screen_side": "right", "facing": "left"}
@@ -81,13 +82,22 @@ Absence is a valid, non-error state (see "Absent/partial canon" below).
 }
 ```
 
-- `master_shot`: the scene's anchor shot id. Set once, before that shot's
-  image exists (see "Master-shot lifecycle").
+- `master_shot`: the scene's anchor shot id, for traceability. Set once, via
+  `set-scene-continuity`, before that shot's image exists (see "Master-shot
+  lifecycle").
+- `master_reference_image`: a frozen snapshot path, populated only by
+  `lock-continuity-master`, absent until that command has run. This is what
+  generation actually reads — never resolved live from the shot's current
+  artifact (see "Master-shot lifecycle" for why).
 - `spatial`: each on-screen character's *initial* state, decided when the
   scene's first shot is authored. `screen_side ∈ {left, center, right}`.
   `facing ∈ {left, right, camera, away}`. Validated inline against these
   constant tuples; an unknown value is a `ValueError`, same style as
-  `shot_store.save_shot`'s validation failures.
+  `shot_store.save_shot`'s validation failures. **No enforced maximum
+  character count** — today's real scenes have 2 on-screen characters, but
+  that's a fact about the current story, not a schema constraint; a
+  3rd/4th character key works the same way, just without any relational
+  semantics between them (the documented, not-yet-built extension point).
 - `transitions`: the *only* legitimate way the canon changes after initial
   authoring. Each entry's `changes` maps a subset of characters to their
   **complete** new `{screen_side, facing}` pair — never a partial single-field
@@ -148,25 +158,36 @@ continuity file present but a character isn't listed in `spatial`
 shot has an image — it's a forward declaration, decided at scene-authoring
 time (Storyboard Step 2), independent of generation order or retries.
 
+The master reference is a **fixed anchor, not a live pointer**. The whole
+point of the master image is to be a stable point later shots can't drift
+away from — if it silently followed the master shot's own later
+regenerations, the canonical reference itself could drift, which defeats
+the purpose. So locking it is a separate, explicit, one-time step:
+
 ```
 set-scene-continuity called (master_shot = S01_SH01)
         ↓
-S01_SH01 generated, reviewed, locked
+S01_SH01 generated, reviewed, locked (select-candidate, as normal)
         ↓
-S01_SH01's generation.image.artifact now exists
+lock-continuity-master --scene S01   (new, explicit command — see below)
         ↓
-S01_SH01's *current* locked artifact becomes usable as the master reference
+S01_SH01's artifact AT THAT MOMENT is copied to a fixed, permanent path
+and recorded as `master_reference_image` in the continuity file
+        ↓
+that snapshot never changes again unless a later
+`lock-continuity-master --force` deliberately re-locks it
 ```
 
-Until the master shot's image is actually locked, generation for other
-shots in the scene proceeds **without** a master-reference image — this is
-not an error condition, just "not available yet." Once locked, the master
-reference always resolves to that shot's **current** artifact — read live
-from `generation.image.artifact.path` each time a reference list is built,
-the same way `previous_shot_image_reference` already works today. If SH01 is
-later regenerated/reselected to a new version, the master reference
-automatically follows via the existing archive/version machinery in
-`shot.json` — no special-casing needed.
+Until `lock-continuity-master` has been run, `master_reference_image` is
+absent and generation for other shots in the scene proceeds **without** a
+master-reference image — not an error, just "not available yet." A later
+regeneration of `S01_SH01` itself (a new version, a re-selected candidate)
+does **not** automatically update `master_reference_image` — the frozen
+snapshot stays exactly what it was at lock time until someone deliberately
+re-locks it. `master_shot` (the id) and `master_reference_image` (the frozen
+file) are two different fields for two different purposes: the id is
+bookkeeping/traceability ("this snapshot came from S01_SH01"); the frozen
+file is what generation actually references.
 
 ## Generation-time integration
 
@@ -178,10 +199,15 @@ consumed by `generate-image` and `generate-candidates --target shot:...`).
 New order:
 
 ```
-environment → characters → master-shot image (if locked, and if it differs
-  from both the current shot and the previous-shot reference)
-  → previous-shot image
+environment → characters → master reference image (if master_reference_image
+  is set, and if it differs from both the current shot and the previous-shot
+  reference) → previous-shot image
 ```
+
+Resolution is a plain read of `master_reference_image` from the scene's
+continuity file — no shot lookup, no live-artifact resolution. If it's
+absent (not yet locked via `lock-continuity-master`), no master reference is
+attached; this is not an error.
 
 Master reference and previous-shot reference serve different, non-replacing
 roles and both should be attached when they differ:
@@ -221,7 +247,7 @@ already-correctly-blocked locked image and inherits correctness for free.
 
 ## CLI commands
 
-Three new commands, no provider spend — pre-authorized in
+Four new commands, no provider spend — pre-authorized in
 `.claude/settings.json` alongside `check-continuity`/`add-feedback`.
 
 **`set-scene-continuity --scene <id> [--master-shot <shot-id>] --character "<name>" --screen-side <left|center|right> --facing <left|right|camera|away>`**
@@ -235,6 +261,31 @@ a harmless no-op (safe to retry). Deliberately revising an established canon
 requires `--force`, an explicit, separate signal of intent — never a
 side effect of a routine retry. `--master-shot`, when given, sets/updates
 `master_shot` on the file (also idempotent for the same value).
+
+**`--force`'s scope is narrow and must stay narrow**: it permits changing
+the *stored* initial state, nothing more. It does **not** regenerate,
+re-validate, or otherwise touch any already-generated shot — a shot locked
+against the old canon does not get silently repaired, and may well now
+fail the Continuity check (Step 3) against the revised canon. That's
+correct, expected behavior: `--force` is for intentional canon correction
+during authoring, and the caller (the Storyboard agent, or a human) is
+responsible for deciding what to do about any shots that predate the
+correction. This keeps the command's effect fully predictable — it changes
+exactly the file it's told to change, never triggers a hidden production
+workflow.
+
+**`lock-continuity-master --scene <id> [--force]`**
+
+Copies the scene's `master_shot`'s *current* locked artifact to a
+permanent, scene-owned path (`02_scenes/SC<NN>_master_reference.png`) and
+records that path as `master_reference_image`. Requires `master_shot`'s
+image to actually be locked (`generation.image.artifact` populated) —
+fails clearly otherwise, telling the caller to lock that shot's image
+first. Idempotency mirrors `set-scene-continuity`: if
+`master_reference_image` is already set, the command fails unless
+`--force` is passed — re-locking is a deliberate act, same reasoning as
+revising `spatial`: a routine retry must never silently replace the
+scene's fixed anchor.
 
 **`add-continuity-transition --scene <id> --after-shot <shot-id> --character "<name>" --screen-side <..> --facing <..> --reason "<text>"`**
 
@@ -268,6 +319,14 @@ another), the agent calls `add-continuity-transition` for the affected
 character(s) with a `reason`, rather than just writing new `action` text
 and hoping it reads as consistent.
 
+**Step 5 addition:** immediately after the scene's *first* shot's image is
+generated and locked (`select-candidate`, as normal — this always happens
+before any other shot in the scene, per Step 5's existing strictly-
+increasing-order rule), the agent runs `lock-continuity-master --scene
+<id>` before moving on to the scene's next shot. This is the one point
+where the master reference snapshot gets created; every later shot in the
+scene then has it available.
+
 **Step 3 addition:** the continuity check gains an explicit rule, checked
 via `show-continuity --shot <id>` before judging: *a shot's described
 blocking may differ from the effective spatial state only if a transition
@@ -280,6 +339,23 @@ visible; the canon constrains where a character *would be* if shown, not
 that every shot must show it. Composition/shot size decisions remain the
 agent's normal judgment call, layered on top of (never contradicting) the
 canon.
+
+**The canon is upstream of generation, never downstream of it.** If a
+generated shot doesn't match the effective spatial state and no transition
+explains why, the fix is to regenerate that shot against the canon — never
+to edit the canon to match what the model happened to produce:
+
+```
+generated shot disagrees with canon, no transition on file
+  ❌ change canon to match the generated shot
+  ✅ regenerate the shot against the existing canon
+```
+
+Only a deliberate, story-driven blocking decision (made by the agent while
+*authoring*, via `add-continuity-transition`) is allowed to change what the
+canon says is true. A generation that happened to drift is never, on its
+own, evidence that the canon was wrong. This is what makes it a continuity
+system rather than a log of whatever the model happened to generate.
 
 ## Testing plan
 
@@ -301,18 +377,33 @@ canon.
   with `--force` succeeds and overwrites.
 - `add-continuity-transition`-equivalent: two calls with the same
   `after_shot` for different characters merge into one transition entry.
+- A `spatial` map with 3+ characters validates and folds transitions
+  correctly — guards against the implementation accidentally assuming
+  exactly 2 characters anywhere in `effective_spatial_state` or validation.
+- `lock-continuity-master`-equivalent: fails if `master_shot`'s image isn't
+  locked yet; on success, copies the artifact and sets
+  `master_reference_image`; a second call without `--force` fails and
+  leaves the existing snapshot untouched; a later regeneration of
+  `master_shot`'s own image does not change `master_reference_image` (no
+  automatic re-sync — this is the "fixed anchor" invariant, tested
+  directly: regenerate the master shot's image, assert the frozen
+  snapshot's bytes/path are unchanged).
 
 **Integration:**
-- Full scenario: scene canon has `A=left, B=right`; SH01's built prompt
-  includes that fragment; SH02 (no transition yet) still includes the same
-  fragment and its reference list includes the master (SH01) image; after a
-  transition declared `after_shot: S01_SH02`, SH03's prompt reflects the
-  updated state and SH03's reference list still includes the *original*
-  master image (the master anchor doesn't change just because blocking
-  did — it's a visual reference point, not a description of "current"
-  state).
+- Full scenario: scene canon has `A=left, B=right`, `master_shot=S01_SH01`
+  and its image is locked and snapshotted via `lock-continuity-master`;
+  SH01's built prompt includes the spatial fragment; SH02 (no transition
+  yet) still includes the same fragment and its reference list includes
+  the frozen master-reference image; after a transition declared
+  `after_shot: S01_SH02`, SH03's prompt reflects the updated state and
+  SH03's reference list still includes the *original* frozen master
+  image, unchanged (the master anchor doesn't change just because
+  blocking did — it's a fixed visual reference point, not a description
+  of "current" state).
 - Absent continuity file: `generate-image`/`generate-candidates` behavior
   is unchanged from before this design (no fragment, no master reference,
   no error).
-- Reference list de-duplication: when `master_shot` equals the previous
-  shot, only one reference image is attached, not two.
+- Reference list de-duplication: when the frozen master-reference image and
+  the previous-shot reference resolve to the same file (e.g. the scene's
+  second shot, whose previous shot is also the master shot), only one copy
+  is attached, not two.
