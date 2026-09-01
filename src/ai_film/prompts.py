@@ -1,8 +1,38 @@
 from __future__ import annotations
 
 
+def _reference_legend(shot: dict) -> str:
+    """Reference images are attached to the provider call as bare,
+    unlabeled image_urls, in this exact order: environment (if any), then
+    each character with a reference (see cli.py's
+    _character_and_environment_references) — nothing in the prompt text
+    ever said which image is which, or that a reference image encodes a
+    fixed identity to preserve rather than a loose style cue. Confirmed as
+    the cause of real character-appearance drift on a live project: even a
+    single-character shot with exactly one reference image still drifted
+    to a different face/hair/wardrobe than that reference, because the
+    model had no signal to lock onto it."""
+    environment = shot.get("environment") or {}
+    labels = []
+    if environment.get("reference"):
+        labels.append(f'the location "{environment.get("name") or "this location"}"')
+    labels += [c["name"] for c in shot.get("characters", []) if c.get("reference")]
+    if not labels:
+        return ""
+    numbered = "; ".join(f"image {i + 1} = {label}" for i, label in enumerate(labels))
+    return (
+        f"Reference images attached in this order: {numbered}. Match each one's exact "
+        "appearance — face, hair, skin tone, and wardrobe for characters; layout and "
+        "materials for the location — do not redesign or reinterpret them."
+    )
+
+
 def build_image_prompt(shot: dict) -> str:
-    parts = [shot.get("action", "")]
+    parts = []
+    legend = _reference_legend(shot)
+    if legend:
+        parts.append(legend)
+    parts.append(shot.get("action", ""))
     visual = shot.get("visual", {})
     if visual.get("style"):
         parts.append(f"style: {visual['style']}")

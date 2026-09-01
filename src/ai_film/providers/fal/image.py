@@ -13,7 +13,21 @@ MODEL_TO_APP_ID = {
     "nano-banana-pro": "fal-ai/nano-banana-pro",
 }
 
-EDIT_APP_ID = "fal-ai/nano-banana-2"
+# The base app ids above are text-to-image only — verified against fal.ai's
+# own OpenAPI schema for both, neither declares an image_urls field at all.
+# An image_urls key sent to them isn't rejected, it's silently dropped, so
+# every "reference-conditioned" generation submitted here was actually
+# unconditioned text-to-image the whole time: real character-appearance
+# drift across shots (same locked reference.png every time) traced back to
+# this. Reference-conditioned generation requires the dedicated /edit
+# endpoint instead, confirmed to declare image_urls (array of strings) for
+# both models.
+MODEL_TO_EDIT_APP_ID = {
+    "nano-banana": "fal-ai/nano-banana-2/edit",
+    "nano-banana-pro": "fal-ai/nano-banana-pro/edit",
+}
+
+EDIT_APP_ID = "fal-ai/nano-banana-2/edit"
 
 
 class FalImageProvider:
@@ -22,10 +36,12 @@ class FalImageProvider:
         self._edits: dict[str, tuple[str, str, ImageEditRequest]] = {}
 
     def submit(self, request: ImageGenerationRequest) -> GenerationJob:
-        app_id = MODEL_TO_APP_ID[request.model]
         input_data = {"prompt": request.prompt, "num_images": request.num_candidates}
         if request.reference_paths:
             input_data["image_urls"] = [client.upload_file(p) for p in request.reference_paths]
+            app_id = MODEL_TO_EDIT_APP_ID.get(request.model, MODEL_TO_APP_ID[request.model])
+        else:
+            app_id = MODEL_TO_APP_ID[request.model]
         job, status_url, response_url = client.submit(app_id, input_data, Capability.IMAGE)
         self._jobs[job.id] = (status_url, response_url, request)
         return job

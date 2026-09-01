@@ -61,6 +61,68 @@ def test_fal_image_provider_full_lifecycle(mock_requests, tmp_path: Path, monkey
 
 
 @patch("ai_film.providers.fal.client.requests")
+def test_fal_image_provider_uses_base_endpoint_without_references(
+    mock_requests, tmp_path: Path, monkeypatch
+):
+    """The base nano-banana-2 app id is text-to-image only — verified
+    against fal.ai's own OpenAPI schema, it has no image_urls field at all
+    and silently drops one if sent. Regression guard for a real bug: every
+    reference-conditioned generation was actually being submitted to this
+    endpoint, so the reference images were never used."""
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    submit_response = MagicMock(status_code=200)
+    submit_response.json.return_value = {
+        "request_id": "req-1", "status_url": "https://queue.fal.run/status/req-1",
+        "response_url": "https://queue.fal.run/result/req-1",
+    }
+    mock_requests.post.return_value = submit_response
+
+    provider = FalImageProvider()
+    provider.submit(
+        ImageGenerationRequest(
+            prompt="a girl in a corridor", model="nano-banana",
+            reference_paths=[], output_path=str(tmp_path / "out.png"),
+        )
+    )
+
+    called_url = mock_requests.post.call_args.args[0]
+    assert called_url == "https://queue.fal.run/fal-ai/nano-banana-2"
+    sent_input = mock_requests.post.call_args.kwargs["json"]
+    assert "image_urls" not in sent_input
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_fal_image_provider_uses_edit_endpoint_with_references(
+    mock_requests, tmp_path: Path, monkeypatch
+):
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    submit_response = MagicMock(status_code=200)
+    submit_response.json.return_value = {
+        "request_id": "req-1", "status_url": "https://queue.fal.run/status/req-1",
+        "response_url": "https://queue.fal.run/result/req-1",
+    }
+    mock_requests.post.return_value = submit_response
+    reference = tmp_path / "ref.png"
+    reference.write_bytes(b"REF-PNG")
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file", lambda path: "https://cdn.fal.run/ref.png"
+    )
+
+    provider = FalImageProvider()
+    provider.submit(
+        ImageGenerationRequest(
+            prompt="a girl in a corridor", model="nano-banana",
+            reference_paths=[str(reference)], output_path=str(tmp_path / "out.png"),
+        )
+    )
+
+    called_url = mock_requests.post.call_args.args[0]
+    assert called_url == "https://queue.fal.run/fal-ai/nano-banana-2/edit"
+    sent_input = mock_requests.post.call_args.kwargs["json"]
+    assert sent_input["image_urls"] == ["https://cdn.fal.run/ref.png"]
+
+
+@patch("ai_film.providers.fal.client.requests")
 def test_fal_audio_provider_tags_each_submit_with_its_own_capability(
     mock_requests, tmp_path: Path, monkeypatch
 ):
@@ -281,6 +343,8 @@ def test_fal_image_provider_submit_edit_full_lifecycle(mock_requests, tmp_path: 
     assert provider.poll(job) == JobStatus.COMPLETED
     result = provider.get_result(job)
     assert Path(result.artifact_path).read_bytes() == b"EDITED-PNG"
+    called_url = mock_requests.post.call_args_list[-1].args[0]
+    assert called_url == "https://queue.fal.run/fal-ai/nano-banana-2/edit"
 
 
 def _mock_submit_response(mock_requests) -> None:

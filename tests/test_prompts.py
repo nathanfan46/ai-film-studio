@@ -54,6 +54,50 @@ def test_build_video_prompt_omits_dialogue_when_shot_has_no_characters():
     assert "hello?" not in prompt
 
 
+def test_build_image_prompt_omits_legend_when_no_references():
+    shot = {"action": "an empty corridor", "visual": {}, "camera": {}}
+    prompt = build_image_prompt(shot)
+    assert "Reference images" not in prompt
+
+
+def test_build_image_prompt_labels_single_character_reference():
+    shot = {
+        "action": "she listens", "visual": {}, "camera": {},
+        "characters": [{"name": "Mara Voss", "reference": "assets/characters/Mara Voss/reference.png"}],
+    }
+    prompt = build_image_prompt(shot)
+    assert "image 1 = Mara Voss" in prompt
+    assert "exact appearance" in prompt
+
+
+def test_build_image_prompt_orders_environment_before_characters_in_legend():
+    shot = {
+        "action": "they talk", "visual": {}, "camera": {},
+        "environment": {"name": "hospital corridor", "reference": "assets/environments/hospital corridor/reference.png"},
+        "characters": [
+            {"name": "Mara Voss", "reference": "assets/characters/Mara Voss/reference.png"},
+            {"name": "Doctor", "reference": "assets/characters/Doctor/reference.png"},
+        ],
+    }
+    prompt = build_image_prompt(shot)
+    assert 'image 1 = the location "hospital corridor"' in prompt
+    assert "image 2 = Mara Voss" in prompt
+    assert "image 3 = Doctor" in prompt
+
+
+def test_build_image_prompt_skips_characters_without_reference():
+    shot = {
+        "action": "they talk", "visual": {}, "camera": {},
+        "characters": [
+            {"name": "Mara Voss", "reference": "assets/characters/Mara Voss/reference.png"},
+            {"name": "Unlocked Extra"},
+        ],
+    }
+    prompt = build_image_prompt(shot)
+    assert "Mara Voss" in prompt
+    assert "Unlocked Extra" not in prompt
+
+
 def test_build_video_prompt_unaffected_by_empty_dialogue():
     shot = {
         "action": "she walks", "visual": {}, "camera": {},
