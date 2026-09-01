@@ -713,6 +713,83 @@ def test_generate_all_video_uses_locked_image(tmp_path: Path, monkeypatch):
     assert provider.requests[-1].reference_paths == [str(project_dir / "04_storyboard" / "S01_SH01.png")]
 
 
+def _set_video_provider_config(project_dir: Path, **overrides) -> None:
+    config = json.loads((project_dir / "config.json").read_text())
+    config["providers"]["video"].update(overrides)
+    (project_dir / "config.json").write_text(json.dumps(config))
+
+
+def test_generate_video_uses_default_model_for_silent_shot_with_feature_override_configured(
+    tmp_path: Path, monkeypatch
+):
+    project_dir = _init_mock_project(tmp_path)
+    _set_video_provider_config(
+        project_dir, model="veo-3", model_by_feature={"dialogue": "hailuo-2.3"},
+    )
+    _approve(project_dir)
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-video", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].model == "veo-3"
+
+
+def test_generate_video_uses_feature_override_model_for_dialogue_shot(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["dialogue"] = {"text": "hello there", "speaker": "girl"}
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _set_video_provider_config(
+        project_dir, model="veo-3", model_by_feature={"dialogue": "hailuo-2.3"},
+    )
+    _approve(project_dir)
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-video", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].model == "hailuo-2.3"
+
+
+def test_generate_video_falls_back_to_default_model_without_feature_override_configured(
+    tmp_path: Path, monkeypatch
+):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["dialogue"] = {"text": "hello there", "speaker": "girl"}
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _set_video_provider_config(project_dir, model="veo-3")  # no model_by_feature key at all
+    _approve(project_dir)
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-video", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].model == "veo-3"
+
+
+def test_generate_all_video_uses_feature_override_model_for_dialogue_shot(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["dialogue"] = {"text": "hello there", "speaker": "girl"}
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _set_video_provider_config(
+        project_dir, model="veo-3", model_by_feature={"dialogue": "hailuo-2.3"},
+    )
+    _approve(project_dir)
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-all", "--stage", "video", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].model == "hailuo-2.3"
+
+
 def test_generate_video_uses_voice_duration_for_a_dialogue_shot_with_completed_voice(
     tmp_path: Path, monkeypatch
 ):

@@ -198,17 +198,56 @@ def _effective_spatial(path: Path, shot_id: str, shot_data: dict) -> dict:
     return {name: values for name, values in full_state.items() if name in shot_characters}
 
 
-def _speaker_voice_id(path: Path, speaker: str) -> int | None:
+def _shot_features(shot_data: dict) -> list[str]:
+    """Ordered, most-specific-first tags describing this shot, used only to
+    key optional per-feature video-model overrides in config. Add a tag
+    here whenever some model needs different handling for a class of shot
+    — today: "dialogue" vs "silent" (some models generate their own
+    uncontrollable talking motion/audio on shots with no assigned line at
+    all, not just ones with dialogue)."""
+    if shot_data.get("dialogue", {}).get("text"):
+        return ["dialogue"]
+    return ["silent"]
+
+
+def _video_model(stage_config: dict, shot_data: dict) -> str:
+    """Pick which video model to use for a shot. `providers.video.model` is
+    the default; an optional `providers.video.model_by_feature` maps a shot
+    feature tag (see `_shot_features`) to an override model — e.g. a model
+    prone to inventing its own talking motion can be kept off silent shots
+    by defaulting elsewhere and opting it in only for `"dialogue"`, where a
+    lipsync pass fixes what it invents anyway. First matching feature wins;
+    falls back to the default model if no feature has an override."""
+    overrides = stage_config.get("model_by_feature", {})
+    for feature in _shot_features(shot_data):
+        if feature in overrides:
+            return overrides[feature]
+    return stage_config["model"]
+
+
+def _load_voice_cast(path: Path) -> dict:
     """Optional per-project voice cast: 01_bibles/voices.json maps a
-    character name to the fal csm-1b speaker_id locked for their voice
-    (picked by ear, since speaker_id is just an arbitrary voice slot with
-    no gender/identity control on its own). Falls back to the provider's
-    hash-based default when the file or the speaker isn't listed."""
+    character name to their locked voice, per model — {"csm_speaker_id":
+    <int>, "speech_voice_preset": <str>} — picked by ear, since neither a
+    csm-1b speaker slot nor a speech-02-hd preset has any inherent
+    gender/identity tie without this. Empty dict if the file doesn't
+    exist or a character isn't listed."""
     voices_path = path / "01_bibles" / "voices.json"
     if not voices_path.exists():
-        return None
-    voices = json.loads(voices_path.read_text())
-    return voices.get(speaker)
+        return {}
+    return json.loads(voices_path.read_text())
+
+
+def _speaker_voice_id(path: Path, speaker: str) -> int | None:
+    """csm-1b's speaker_id for `speaker`, or None to fall back to the
+    provider's hash-based default."""
+    return _load_voice_cast(path).get(speaker, {}).get("csm_speaker_id")
+
+
+def _voice_preset(path: Path, speaker: str) -> str | None:
+    """speech-02-hd's named voice_id for `speaker`, or None to fall back to
+    the provider's generic default voice."""
+    return _load_voice_cast(path).get(speaker, {}).get("speech_voice_preset")
 
 
 def _video_references(path: Path, shot_data: dict) -> list[str]:
@@ -276,7 +315,7 @@ def generate_video_cmd(
         provider = resolve_provider(Capability.VIDEO, stage_config["provider"])
         return generate_video_service(
             project_dir=path, shot_path=shot_path, provider=provider,
-            prompt=build_video_prompt(shot_data), model=stage_config["model"],
+            prompt=build_video_prompt(shot_data), model=_video_model(stage_config, shot_data),
             reference_paths=references, duration_seconds=_video_duration(shot_data),
             output_path=path / "05_video" / f"{shot}.mp4",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
@@ -341,6 +380,7 @@ def generate_voice_cmd(
             text=dialogue.get("text", ""), model=stage_config["model"],
             speaker=dialogue.get("speaker", ""),
             speaker_id=_speaker_voice_id(path, dialogue.get("speaker", "")),
+            voice_preset=_voice_preset(path, dialogue.get("speaker", "")),
             output_path=path / "06_audio" / "dialogue" / f"{shot}.wav",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
@@ -688,7 +728,7 @@ def _build_stage_call(path: Path, shot_id: str, stage: str, force: bool):
         references = _video_references(path, shot_data)
         return lambda: service_fn(
             project_dir=path, shot_path=shot_path, provider=provider,
-            prompt=build_video_prompt(shot_data), model=stage_config["model"],
+            prompt=build_video_prompt(shot_data), model=_video_model(stage_config, shot_data),
             reference_paths=references, duration_seconds=_video_duration(shot_data),
             output_path=path / "05_video" / f"{shot_id}.mp4",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
@@ -701,6 +741,7 @@ def _build_stage_call(path: Path, shot_id: str, stage: str, force: bool):
         text=dialogue.get("text", ""), model=stage_config["model"],
         speaker=dialogue.get("speaker", ""),
         speaker_id=_speaker_voice_id(path, dialogue.get("speaker", "")),
+        voice_preset=_voice_preset(path, dialogue.get("speaker", "")),
         output_path=path / "06_audio" / "dialogue" / f"{shot_id}.wav",
         provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
         poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,

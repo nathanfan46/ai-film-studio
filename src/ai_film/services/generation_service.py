@@ -411,10 +411,11 @@ def generate_voice(
     poll_interval_seconds: float = 0.0,
     force: bool = False,
     speaker_id: int | None = None,
+    voice_preset: str | None = None,
 ) -> dict:
     request = VoiceGenerationRequest(
         text=text, model=model, speaker=speaker, output_path=str(output_path),
-        speaker_id=speaker_id,
+        speaker_id=speaker_id, voice_preset=voice_preset,
     )
     return run_generation_stage(
         project_dir=project_dir, shot_path=shot_path, stage="voice",
