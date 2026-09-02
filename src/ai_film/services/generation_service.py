@@ -274,11 +274,12 @@ def generate_video(
     poll_interval_seconds: float = 0.0,
     force: bool = False,
     suppress_captions: bool = True,
+    end_reference_path: str = "",
 ) -> dict:
     request = VideoGenerationRequest(
         prompt=prompt, model=model, reference_paths=reference_paths,
         duration_seconds=duration_seconds, output_path=str(output_path),
-        suppress_captions=suppress_captions,
+        suppress_captions=suppress_captions, end_reference_path=end_reference_path,
     )
     return run_generation_stage(
         project_dir=project_dir, shot_path=shot_path, stage="video",

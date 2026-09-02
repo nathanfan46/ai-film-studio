@@ -59,6 +59,15 @@ _NO_DURATION_FIELD_MODELS = {"hailuo-2.3-fast"}
 # turned off at the source for these models.
 MODELS_WITH_AUTO_AUDIO = {"veo-3"}
 
+# Models whose endpoint accepts a separate end_image_url, i.e. true
+# first-frame-to-last-frame (dual-keyframe) generation — verified against
+# h3-max's real OpenAPI schema: "end_image_url" is a distinct optional
+# field alongside "image_url", described as "the image to use as the last
+# frame, for first-to-last keyframe generation." hailuo-2.3/veo-3/etc.
+# have no such field; end_reference_path is silently ignored for them, so
+# a caller can always pass one without needing to know per-model support.
+MODELS_WITH_END_IMAGE_URL = {"h3-max"}
+
 # Some models (observed on a hailuo-2.3 base video, S01_SH03) burn a
 # subtitle-style on-screen caption of the spoken line into the frame, with
 # timing that doesn't reliably match the actual voice track once combined
@@ -110,6 +119,8 @@ class FalVideoProvider:
                 request.model, MODEL_TO_APP_ID[request.model]
             )
             input_data["image_url"] = client.upload_file(request.reference_paths[0])
+            if request.end_reference_path and request.model in MODELS_WITH_END_IMAGE_URL:
+                input_data["end_image_url"] = client.upload_file(request.end_reference_path)
         else:
             app_id = MODEL_TO_APP_ID[request.model]
         job, status_url, response_url = client.submit(app_id, input_data, Capability.VIDEO)

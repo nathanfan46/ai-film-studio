@@ -75,6 +75,29 @@ def _extract_frames(video_path: Path, out_dir: Path, interval_seconds: float, du
     return frames
 
 
+def extract_last_frame(video_path: Path, output_path: Path) -> None:
+    """Extract a video's final frame to output_path via ffmpeg. Seeks to
+    just before the very end, not exactly at it — seeking to or past a
+    video's exact last timestamp routinely yields a black or corrupted
+    frame with some encoders/containers."""
+    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+        raise RuntimeError("ffmpeg/ffprobe is not installed or not on PATH")
+    duration = _probe_duration(video_path)
+    timestamp = max(duration - 0.1, 0.0)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-ss", str(timestamp), "-i", str(video_path),
+                "-frames:v", "1", str(output_path),
+            ],
+            check=True, capture_output=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode(errors="replace") if exc.stderr else ""
+        raise RuntimeError(f"ffmpeg failed extracting last frame: {stderr}") from exc
+
+
 def diagnose_video(project_dir: Path, shot_path: Path, interval_seconds: float = 0.5) -> dict:
     """Extract frames from a shot's current video at a fixed interval and
     report the silence windows detected in its own audio track — a

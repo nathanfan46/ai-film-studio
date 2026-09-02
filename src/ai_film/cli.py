@@ -38,6 +38,7 @@ from ai_film.audio_fix import apply_audio_offset as apply_audio_offset_service
 from ai_film.video_fix import trim_video as trim_video_service
 from ai_film.video_fix import mux_audio_track as mux_audio_track_service
 from ai_film.video_diagnostics import diagnose_video as diagnose_video_service
+from ai_film.video_diagnostics import extract_last_frame
 from ai_film.scene_continuity import (
     add_continuity_transition as add_continuity_transition_service,
     effective_spatial_state,
@@ -322,16 +323,74 @@ def _video_duration(shot_data: dict) -> float:
     return shot_data["duration_seconds"]
 
 
+def _continue_from_previous_references(
+    path: Path, shot: str, shot_data: dict
+) -> tuple[list[str], str]:
+    """Resolve --continue-from-previous into (reference_paths, end_reference_path):
+    the previous shot's current video's last frame as the sole starting
+    reference, and this shot's own locked storyboard image as the end
+    reference — true dual-keyframe continuity for models that honor
+    end_image_url (see MODELS_WITH_END_IMAGE_URL in providers/fal/video.py);
+    silently ignored by models that don't. Falls back to this shot's normal
+    references with no end frame, printing why, whenever there's no usable
+    predecessor video or no locked end image to aim for."""
+    fallback = (_video_references(path, shot_data), "")
+    prev_id = previous_shot_id(shot)
+    if prev_id is None:
+        typer.echo(
+            f"note: {shot} is a scene's first shot — --continue-from-previous has no predecessor to use",
+            err=True,
+        )
+        return fallback
+    prev_shot_path = path / "03_shots" / f"{prev_id}.json"
+    if not prev_shot_path.exists():
+        typer.echo(
+            f"note: {shot}'s predecessor {prev_id} not found — ignoring --continue-from-previous",
+            err=True,
+        )
+        return fallback
+    prev_video = load_shot(prev_shot_path).get("generation", {}).get("video", {}).get("artifact")
+    if not prev_video or not prev_video.get("path"):
+        typer.echo(
+            f"note: {shot}'s predecessor {prev_id} has no video yet — ignoring --continue-from-previous",
+            err=True,
+        )
+        return fallback
+    end_artifact = shot_data.get("generation", {}).get("image", {}).get("artifact")
+    if not end_artifact or not end_artifact.get("path"):
+        typer.echo(
+            f"note: {shot} has no locked storyboard image yet — ignoring --continue-from-previous",
+            err=True,
+        )
+        return fallback
+    last_frame_path = path / "05_video" / "last_frame" / f"{prev_id}.png"
+    extract_last_frame(path / prev_video["path"], last_frame_path)
+    return [str(last_frame_path)], str(path / end_artifact["path"])
+
+
 @app.command(name="generate-video")
 def generate_video_cmd(
     shot: str = typer.Option(..., "--shot"),
     path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
     force: bool = typer.Option(False, "--force"),
+    continue_from_previous: bool = typer.Option(
+        False,
+        "--continue-from-previous",
+        help=(
+            "Start this shot's video from the previous shot's last frame, "
+            "ending at this shot's own locked storyboard image (dual-keyframe "
+            "continuity). Only models in MODELS_WITH_END_IMAGE_URL (h3-max) "
+            "honor the end frame; other models fall back to the start frame only."
+        ),
+    ),
 ) -> None:
     stage_config, gen_config = _stage_config(path, "video")
     shot_path = path / "03_shots" / f"{shot}.json"
     shot_data = load_shot(shot_path)
-    references = _video_references(path, shot_data)
+    if continue_from_previous:
+        references, end_reference_path = _continue_from_previous_references(path, shot, shot_data)
+    else:
+        references, end_reference_path = _video_references(path, shot_data), ""
 
     def _run():
         provider = resolve_provider(Capability.VIDEO, stage_config["provider"])
@@ -343,6 +402,7 @@ def generate_video_cmd(
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
             suppress_captions=not stage_config.get("parameters", {}).get("captions", False),
+            end_reference_path=end_reference_path,
         )
 
     _run_generation(shot, "video", _run)

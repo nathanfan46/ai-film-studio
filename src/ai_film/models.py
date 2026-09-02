@@ -66,6 +66,7 @@ class VideoGenerationRequest:
     duration_seconds: float = 5.0
     output_path: str = ""
     suppress_captions: bool = True
+    end_reference_path: str = ""
 
 
 @dataclass

@@ -1093,3 +1093,137 @@ def test_generate_video_regeneration_clears_the_lipsynced_tag(tmp_path: Path):
 
     updated = load_shot(project_dir / "03_shots" / "S01_SH01.json")
     assert "lipsynced" not in updated["generation"]["video"]["artifact"]
+
+
+def _make_tiny_video(path: Path, duration: float = 1.0) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-f", "lavfi", "-i", f"testsrc=duration={duration}:size=64x64:rate=10",
+            str(path),
+        ],
+        check=True, capture_output=True,
+    )
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_generate_video_continue_from_previous_uses_extracted_last_frame_and_locked_image(
+    tmp_path: Path, monkeypatch
+):
+    project_dir = _init_mock_project(tmp_path)
+    prev_video_path = project_dir / "05_video" / "S01_SH01.mp4"
+    _make_tiny_video(prev_video_path)
+    shot1 = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot1["generation"]["video"] = {
+        "status": "completed", "attempts": 1,
+        "artifact": {"path": "05_video/S01_SH01.mp4", "size_bytes": 10, "sha256": None, "duration_seconds": 1.0},
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot1)
+
+    shot2 = _shot("S01_SH02")
+    shot2["generation"]["image"] = {
+        "status": "completed", "attempts": 1,
+        "artifact": {"path": "04_storyboard/S01_SH02.png", "size_bytes": 10, "sha256": None},
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH02.json", shot2)
+    (project_dir / "04_storyboard").mkdir(parents=True, exist_ok=True)
+    (project_dir / "04_storyboard" / "S01_SH02.png").write_bytes(b"fake-png")
+    _approve(project_dir, "S01_SH02")
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(
+        app,
+        ["generate-video", "--shot", "S01_SH02", "--continue-from-previous", "--path", str(project_dir)],
+    )
+    assert result.exit_code == 0, result.output
+    request = provider.requests[-1]
+    assert request.reference_paths == [str(project_dir / "05_video" / "last_frame" / "S01_SH01.png")]
+    assert (project_dir / "05_video" / "last_frame" / "S01_SH01.png").exists()
+    assert request.end_reference_path == str(project_dir / "04_storyboard" / "S01_SH02.png")
+
+
+def test_generate_video_continue_from_previous_falls_back_for_scene_first_shot(
+    tmp_path: Path, monkeypatch
+):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["generation"]["image"] = {
+        "status": "completed", "attempts": 1,
+        "artifact": {"path": "04_storyboard/S01_SH01.png", "size_bytes": 10, "sha256": None},
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _approve(project_dir)
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(
+        app,
+        ["generate-video", "--shot", "S01_SH01", "--continue-from-previous", "--path", str(project_dir)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "no predecessor to use" in result.output
+    request = provider.requests[-1]
+    assert request.reference_paths == [str(project_dir / "04_storyboard" / "S01_SH01.png")]
+    assert request.end_reference_path == ""
+
+
+def test_generate_video_continue_from_previous_falls_back_without_predecessor_video(
+    tmp_path: Path, monkeypatch
+):
+    project_dir = _init_mock_project(tmp_path)  # S01_SH01 has no completed video
+    shot2 = _shot("S01_SH02")
+    save_shot(project_dir / "03_shots" / "S01_SH02.json", shot2)
+    _approve(project_dir, "S01_SH02")
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(
+        app,
+        ["generate-video", "--shot", "S01_SH02", "--continue-from-previous", "--path", str(project_dir)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "has no video yet" in result.output
+    assert provider.requests[-1].end_reference_path == ""
+
+
+def test_generate_video_continue_from_previous_falls_back_without_locked_end_image(
+    tmp_path: Path, monkeypatch
+):
+    project_dir = _init_mock_project(tmp_path)
+    shot1 = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot1["generation"]["video"] = {
+        "status": "completed", "attempts": 1,
+        "artifact": {"path": "05_video/S01_SH01.mp4", "size_bytes": 10, "sha256": None, "duration_seconds": 1.0},
+    }
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot1)
+
+    shot2 = _shot("S01_SH02")  # no locked storyboard image
+    save_shot(project_dir / "03_shots" / "S01_SH02.json", shot2)
+    _approve(project_dir, "S01_SH02")
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(
+        app,
+        ["generate-video", "--shot", "S01_SH02", "--continue-from-previous", "--path", str(project_dir)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "no locked storyboard image yet" in result.output
+    assert provider.requests[-1].end_reference_path == ""
+
+
+def test_generate_video_without_flag_never_sets_end_reference_path(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    _approve(project_dir)
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-video", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].end_reference_path == ""

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from ai_film.shot_store import save_shot
-from ai_film.video_diagnostics import diagnose_video
+from ai_film.video_diagnostics import diagnose_video, extract_last_frame
 
 
 def _make_tiny_video(path: Path, duration: float = 2.0, with_audio: bool = False) -> None:
@@ -92,3 +92,23 @@ def test_diagnose_video_reports_no_audio_track(tmp_path: Path):
     report = diagnose_video(tmp_path, shot_path, interval_seconds=0.5)
 
     assert report["silence_windows"] is None
+
+
+def test_extract_last_frame_raises_when_ffmpeg_missing(tmp_path: Path, monkeypatch):
+    video_path = tmp_path / "video.mp4"
+    video_path.write_bytes(b"FAKE-MP4")
+    monkeypatch.setattr("ai_film.video_diagnostics.shutil.which", lambda name: None)
+    with pytest.raises(RuntimeError):
+        extract_last_frame(video_path, tmp_path / "out.png")
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_extract_last_frame_writes_a_real_frame(tmp_path: Path):
+    video_path = tmp_path / "video.mp4"
+    _make_tiny_video(video_path, duration=1.0, with_audio=False)
+    output_path = tmp_path / "last_frame" / "out.png"
+
+    extract_last_frame(video_path, output_path)
+
+    assert output_path.exists()
+    assert output_path.stat().st_size > 0

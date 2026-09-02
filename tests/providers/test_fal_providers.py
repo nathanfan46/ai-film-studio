@@ -537,6 +537,72 @@ def test_h3_max_sends_integer_duration_and_prompt_expansion_mode(
 
 
 @patch("ai_film.providers.fal.client.requests")
+def test_h3_max_sends_end_image_url_for_dual_keyframe_continuity(
+    mock_requests, tmp_path: Path, monkeypatch
+):
+    """Verified against fal.ai's OpenAPI schema for
+    minimax/h3-max/image-to-video: end_image_url is a distinct optional
+    field, "the image to use as the last frame, for first-to-last keyframe
+    generation" — h3-max is the only model in MODELS_WITH_END_IMAGE_URL."""
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    _mock_submit_response(mock_requests)
+    reference = tmp_path / "start.png"
+    reference.write_bytes(b"START-PNG")
+    end_reference = tmp_path / "end.png"
+    end_reference.write_bytes(b"END-PNG")
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file",
+        lambda path: f"https://cdn.fal.run/{Path(path).name}",
+    )
+
+    provider = FalVideoProvider()
+    provider.submit(
+        VideoGenerationRequest(
+            prompt="a girl walks", model="h3-max", reference_paths=[str(reference)],
+            end_reference_path=str(end_reference),
+            duration_seconds=5, output_path=str(tmp_path / "out.mp4"),
+        )
+    )
+
+    sent_input = mock_requests.post.call_args.kwargs["json"]
+    assert sent_input["image_url"] == "https://cdn.fal.run/start.png"
+    assert sent_input["end_image_url"] == "https://cdn.fal.run/end.png"
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_hailuo_ignores_end_reference_path_since_its_schema_has_no_such_field(
+    mock_requests, tmp_path: Path, monkeypatch
+):
+    """Verified against fal.ai's OpenAPI schema for
+    fal-ai/minimax/hailuo-2.3/standard/image-to-video: no end_image_url-
+    equivalent field exists — a caller can pass end_reference_path without
+    needing to know per-model support; it's silently dropped here."""
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    _mock_submit_response(mock_requests)
+    reference = tmp_path / "start.png"
+    reference.write_bytes(b"START-PNG")
+    end_reference = tmp_path / "end.png"
+    end_reference.write_bytes(b"END-PNG")
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file",
+        lambda path: f"https://cdn.fal.run/{Path(path).name}",
+    )
+
+    provider = FalVideoProvider()
+    provider.submit(
+        VideoGenerationRequest(
+            prompt="a girl walks", model="hailuo-2.3", reference_paths=[str(reference)],
+            end_reference_path=str(end_reference),
+            duration_seconds=6, output_path=str(tmp_path / "out.mp4"),
+        )
+    )
+
+    sent_input = mock_requests.post.call_args.kwargs["json"]
+    assert sent_input["image_url"] == "https://cdn.fal.run/start.png"
+    assert "end_image_url" not in sent_input
+
+
+@patch("ai_film.providers.fal.client.requests")
 def test_lipsync_provider_uploads_video_and_audio_and_returns_original_duration(
     mock_requests, tmp_path: Path, monkeypatch
 ):
