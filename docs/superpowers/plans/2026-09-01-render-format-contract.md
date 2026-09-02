@@ -1258,14 +1258,20 @@ def test_generate_image_passes_resolved_target_format_to_provider(tmp_path: Path
 
 def test_generate_video_prints_warning_on_format_mismatch(tmp_path: Path, monkeypatch):
     project_dir = _init_mock_project(tmp_path)
+    # generation_service.generate_video skips format validation entirely when
+    # provider_name == "mock" (see Task 3's Global Constraints guard — the mock
+    # provider writes placeholder bytes ffprobe can't read). _init_mock_project
+    # sets every stage's config provider to "mock", so this one test switches
+    # video's config provider string to "fal" — the actual provider OBJECT
+    # used is still the fake _RecordingVideoProvider below, injected via the
+    # resolve_provider monkeypatch; only the provider_name string that flows
+    # into generate_video's skip-guard needs to read "fal" here.
+    config = json.loads((project_dir / "config.json").read_text())
+    config["providers"]["video"]["provider"] = "fal"
+    (project_dir / "config.json").write_text(json.dumps(config))
     _approve(project_dir)
 
-    class _MismatchProvider(_RecordingVideoProvider):
-        def get_result(self, job):
-            result = super().get_result(job)
-            return result
-
-    provider = _MismatchProvider()
+    provider = _RecordingVideoProvider()
     monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
     # Force the service layer's validation to report a mismatch without needing
     # a real ffmpeg-generated file: patch _apply_video_format_validation directly.
