@@ -236,6 +236,8 @@ _ASPECT_RATIO_TOLERANCE = 0.02
 
 
 def _probe_resolution(path: Path) -> tuple[int, int]:
+    if shutil.which("ffprobe") is None:
+        raise ProviderError("ffprobe is not installed or not on PATH")
     probe = subprocess.run(
         [
             "ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -243,11 +245,19 @@ def _probe_resolution(path: Path) -> tuple[int, int]:
         ],
         capture_output=True, text=True,
     )
-    width_str, height_str = probe.stdout.strip().split("x")
-    return int(width_str), int(height_str)
+    raw = probe.stdout.strip()
+    try:
+        width_str, height_str = raw.split("x")
+        return int(width_str), int(height_str)
+    except (ValueError, IndexError) as exc:
+        raise ProviderError(
+            f"could not parse resolution for {path}: ffprobe returned {raw!r}"
+        ) from exc
 
 
 def _probe_fps(path: Path) -> Fraction:
+    if shutil.which("ffprobe") is None:
+        raise ProviderError("ffprobe is not installed or not on PATH")
     probe = subprocess.run(
         [
             "ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -256,7 +266,13 @@ def _probe_fps(path: Path) -> Fraction:
         ],
         capture_output=True, text=True,
     )
-    return Fraction(probe.stdout.strip())
+    raw = probe.stdout.strip()
+    try:
+        return Fraction(raw)
+    except (ValueError, ZeroDivisionError) as exc:
+        raise ProviderError(
+            f"could not parse fps for {path}: ffprobe returned {raw!r}"
+        ) from exc
 
 
 def _format_mismatch(target_width: int, target_height: int, actual_width: int, actual_height: int) -> bool:

@@ -18,6 +18,7 @@ from ai_film.prompts import build_image_prompt, build_video_prompt
 from ai_film.providers.fal.catalog import FalProviderCatalog
 from ai_film.providers.registry import resolve_provider
 from ai_film.render import RenderPreflightError, build_manifest
+from ai_film.render import preflight_warnings as preflight_warnings_service
 from ai_film.render import render as render_engine
 from ai_film.review_gallery import build_gallery, open_in_browser
 from ai_film.schema import validate_shot
@@ -870,6 +871,15 @@ def review_media_cmd(
 def render_cmd(path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path")) -> None:
     manifest = build_manifest(path)
     try:
+        for warning in preflight_warnings_service(manifest, path):
+            typer.echo(warning, err=True)
+    except RuntimeError:
+        # preflight_warnings is purely diagnostic (see its docstring) — a
+        # probe failure here (e.g. an artifact ffprobe can't parse) must
+        # never block the render itself, only the warning it would have
+        # printed.
+        pass
+    try:
         output_path = render_engine(path, manifest)
     except RenderPreflightError as exc:
         typer.echo("render preflight failed:", err=True)
@@ -898,6 +908,8 @@ def _build_stage_call(path: Path, shot_id: str, stage: str, force: bool):
 
     if stage == "image":
         references = _image_references(path, shot_id, shot_data, quiet=True)
+        target_width, target_height, _target_fps = _resolve_target_format(path, shot_data)
+        strict_format = _strict_format(path)
         return lambda: service_fn(
             project_dir=path, shot_path=shot_path, provider=provider,
             prompt=build_image_prompt(
@@ -907,9 +919,12 @@ def _build_stage_call(path: Path, shot_id: str, stage: str, force: bool):
             reference_paths=references, output_path=path / "04_storyboard" / f"{shot_id}.png",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
+            target_width=target_width, target_height=target_height, strict_format=strict_format,
         )
     if stage == "video":
         references = _video_references(path, shot_data)
+        target_width, target_height, target_fps = _resolve_target_format(path, shot_data)
+        strict_format = _strict_format(path)
         return lambda: service_fn(
             project_dir=path, shot_path=shot_path, provider=provider,
             prompt=build_video_prompt(shot_data), model=_video_model(stage_config, shot_data),
@@ -918,6 +933,8 @@ def _build_stage_call(path: Path, shot_id: str, stage: str, force: bool):
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
             suppress_captions=not stage_config.get("parameters", {}).get("captions", False),
+            target_width=target_width, target_height=target_height, target_fps=target_fps,
+            strict_format=strict_format,
         )
     dialogue = shot_data.get("dialogue", {})
     return lambda: service_fn(

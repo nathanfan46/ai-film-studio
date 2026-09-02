@@ -270,6 +270,9 @@ records each one.
 
 ## Known limitations (v1)
 
+- **`render` includes only audio already embedded in each shot's video clip.**
+  Standalone `06_audio/` sfx/music tracks, and voice on any shot that never went
+  through `generate-lipsync`, are still not mixed into the final reel.
 - **No crash-safety for in-flight jobs.** A killed process mid-generation loses track
   of the paid job it just submitted; a re-run will resubmit and pay again.
 - **No backoff or timeout on provider polling** — a stuck job can hang a `generate-*`

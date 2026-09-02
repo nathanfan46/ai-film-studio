@@ -521,6 +521,82 @@ def test_generate_image_strict_format_raises_on_aspect_ratio_mismatch(tmp_path: 
         )
 
 
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_generate_video_strict_format_close_match_completes_without_mismatch(tmp_path: Path):
+    """A close aspect-ratio match (1344x768 vs. target 1280x720, within the
+    2% tolerance) must complete successfully under strict_format=True too —
+    strict mode must not fail legitimate provider-native results, only
+    genuine mismatches. Companion to
+    test_generate_video_records_format_metadata_on_close_match, which only
+    exercised this case at strict_format's default (False)."""
+    project_dir = _project(tmp_path)
+    shot_path = _shot_path(project_dir)
+    approve_generation(project_dir, "storyboard", ["S01_SH01"], estimated_cost=0.1)
+
+    stage = generate_video(
+        project_dir=project_dir, shot_path=shot_path,
+        provider=_RealFileVideoProvider(width=1344, height=768, fps=24),
+        prompt="x", model="h3-max", reference_paths=[],
+        duration_seconds=2.0, output_path=project_dir / "05_video" / "S01_SH01.mp4",
+        provider_name="fal", target_width=1280, target_height=720, target_fps=24,
+        strict_format=True,
+    )
+
+    assert stage["status"] == "completed"
+    assert "format_mismatch" not in stage["artifact"]
+
+
+def test_generate_video_malformed_artifact_raises_provider_error_and_restores(tmp_path: Path):
+    """A malformed/garbage "video" file (e.g. a truncated or corrupted
+    provider response saved with a .mp4 extension) makes ffprobe's stdout
+    unparsable. _probe_resolution/_probe_fps must turn that parse failure
+    into a ProviderError (not a bare ValueError/IndexError) so it flows
+    through run_generation_stage's existing restore/mark-failed/re-raise
+    path instead of escaping uncaught and leaving the shot's prior artifact
+    stranded in history/."""
+
+    class _GarbageFileVideoProvider:
+        def __init__(self):
+            self._requests: dict[str, object] = {}
+            self._n = 0
+
+        def submit(self, request):
+            self._n += 1
+            job_id = f"garbage-video-{self._n}"
+            self._requests[job_id] = request
+            return GenerationJob(provider="test", id=job_id, capability=Capability.VIDEO)
+
+        def poll(self, job):
+            return JobStatus.COMPLETED
+
+        def get_result(self, job):
+            request = self._requests[job.id]
+            output_path = Path(request.output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"not a real video")
+            return VideoGenerationResult(
+                artifact_path=str(output_path), size_bytes=output_path.stat().st_size,
+                duration_seconds=request.duration_seconds,
+            )
+
+    project_dir = _project(tmp_path)
+    shot_path = _shot_path(project_dir)
+    approve_generation(project_dir, "storyboard", ["S01_SH01"], estimated_cost=0.1)
+
+    with pytest.raises(ProviderError):
+        generate_video(
+            project_dir=project_dir, shot_path=shot_path,
+            provider=_GarbageFileVideoProvider(),
+            prompt="x", model="veo-3", reference_paths=[],
+            duration_seconds=2.0, output_path=project_dir / "05_video" / "S01_SH01.mp4",
+            provider_name="fal", target_width=1280, target_height=720, target_fps=24,
+        )
+
+    shot = load_shot(shot_path)
+    assert shot["generation"]["video"]["status"] == "failed"
+    assert shot["generation"]["video"].get("artifact") is None  # never persisted
+
+
 def test_generate_video_no_target_skips_validation_entirely(tmp_path: Path):
     """target_width/target_height left at their 0 default (no caller
     resolved a target) — validation is a pure no-op, matching every
