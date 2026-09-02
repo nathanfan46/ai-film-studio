@@ -138,6 +138,45 @@ def _stage_config(path: Path, stage: str) -> dict:
     return config["providers"][stage], config["generation"]
 
 
+_DEFAULT_TARGET_RESOLUTION = (1280, 720)
+_DEFAULT_TARGET_FPS = 24
+
+
+def _parse_resolution(resolution: str) -> tuple[int, int]:
+    width_str, height_str = resolution.lower().split("x")
+    return int(width_str), int(height_str)
+
+
+def _render_config(path: Path) -> dict:
+    config = json.loads((path / "config.json").read_text())
+    return config.get("render", {})
+
+
+def _resolve_target_format(path: Path, shot_data: dict) -> tuple[int, int, int]:
+    """The shot target format (width, height, fps) — an explicit per-shot
+    override via shot.json's `format` field if present, else the
+    project's config.json `render` defaults, else the engine's hardcoded
+    fallback. Never mutates shot.json; a legacy shot with no `format`
+    resolves purely at call time, every time. See the design spec's
+    Terminology section for why this is an override, not a read-only
+    copy."""
+    shot_format = shot_data.get("format")
+    if shot_format and shot_format.get("resolution"):
+        width, height = _parse_resolution(shot_format["resolution"])
+        fps = shot_format.get("fps", _DEFAULT_TARGET_FPS)
+        return width, height, fps
+    render_config = _render_config(path)
+    if render_config.get("resolution"):
+        width, height = _parse_resolution(render_config["resolution"])
+        fps = render_config.get("fps", _DEFAULT_TARGET_FPS)
+        return width, height, fps
+    return (*_DEFAULT_TARGET_RESOLUTION, _DEFAULT_TARGET_FPS)
+
+
+def _strict_format(path: Path) -> bool:
+    return bool(_render_config(path).get("strict_format", False))
+
+
 def _run_generation(shot_id: str, stage_name: str, run_fn) -> None:
     try:
         result = run_fn()

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from ai_film.cli import app
+from ai_film.cli import app, _parse_resolution, _resolve_target_format, _strict_format
 from ai_film.shot_store import load_shot, save_shot
 from ai_film.models import Capability, GenerationJob, ImageGenerationResult, JobStatus, VideoGenerationResult
 
@@ -793,6 +793,45 @@ def test_generate_all_video_uses_locked_image(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["generate-all", "--stage", "video", "--path", str(project_dir)])
     assert result.exit_code == 0, result.output
     assert provider.requests[-1].reference_paths == [str(project_dir / "04_storyboard" / "S01_SH01.png")]
+
+
+def test_parse_resolution_splits_width_and_height():
+    assert _parse_resolution("1280x720") == (1280, 720)
+    assert _parse_resolution("1920x1080") == (1920, 1080)
+
+
+def test_resolve_target_format_uses_shot_format_when_present(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    shot_data = _shot("S01_SH01")
+    shot_data["format"] = {"resolution": "1920x1080", "fps": 30}
+    assert _resolve_target_format(project_dir, shot_data) == (1920, 1080, 30)
+
+
+def test_resolve_target_format_falls_back_to_render_config(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    config = json.loads((project_dir / "config.json").read_text())
+    config["render"] = {"resolution": "1408x768", "fps": 25, "strict_format": False}
+    (project_dir / "config.json").write_text(json.dumps(config))
+    shot_data = _shot("S01_SH01")  # no format field
+    assert _resolve_target_format(project_dir, shot_data) == (1408, 768, 25)
+
+
+def test_resolve_target_format_falls_back_to_hardcoded_default_when_render_empty(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    config = json.loads((project_dir / "config.json").read_text())
+    config["render"] = {}
+    (project_dir / "config.json").write_text(json.dumps(config))
+    shot_data = _shot("S01_SH01")
+    assert _resolve_target_format(project_dir, shot_data) == (1280, 720, 24)
+
+
+def test_strict_format_reads_render_config(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    assert _strict_format(project_dir) is False  # _init_mock_project's default config.json
+    config = json.loads((project_dir / "config.json").read_text())
+    config["render"]["strict_format"] = True
+    (project_dir / "config.json").write_text(json.dumps(config))
+    assert _strict_format(project_dir) is True
 
 
 def _set_video_provider_config(project_dir: Path, **overrides) -> None:
