@@ -1,5 +1,7 @@
 # ai-film
 
+Read this in other languages: [繁體中文](README.zh-TW.md)
+
 `ai-film` is a standalone, provider-independent CLI and engine for an AI film-production
 pipeline. It scaffolds a project directory, tracks each shot's generation lifecycle
 (image, video, voice, sfx, music) through a JSON shot store with a cost-gated approval
