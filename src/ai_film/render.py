@@ -78,7 +78,13 @@ def _probe_duration(video_path: Path) -> float:
         ],
         capture_output=True, text=True,
     )
-    return float(probe.stdout.strip())
+    raw = probe.stdout.strip()
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"could not parse duration for {video_path}: ffprobe returned {raw!r}"
+        ) from exc
 
 
 def _probe_resolution(video_path: Path) -> tuple[int, int]:
@@ -89,8 +95,14 @@ def _probe_resolution(video_path: Path) -> tuple[int, int]:
         ],
         capture_output=True, text=True,
     )
-    width_str, height_str = probe.stdout.strip().split("x")
-    return int(width_str), int(height_str)
+    raw = probe.stdout.strip()
+    try:
+        width_str, height_str = raw.split("x")
+        return int(width_str), int(height_str)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"could not parse resolution for {video_path}: ffprobe returned {raw!r}"
+        ) from exc
 
 
 def _probe_fps(video_path: Path) -> Fraction:
@@ -102,7 +114,13 @@ def _probe_fps(video_path: Path) -> Fraction:
         ],
         capture_output=True, text=True,
     )
-    return Fraction(probe.stdout.strip())
+    raw = probe.stdout.strip()
+    try:
+        return Fraction(raw)
+    except (ValueError, ZeroDivisionError) as exc:
+        raise RuntimeError(
+            f"could not parse fps for {video_path}: ffprobe returned {raw!r}"
+        ) from exc
 
 
 def _has_audio_stream(video_path: Path) -> bool:
@@ -126,8 +144,11 @@ def _render_target(project_dir: Path) -> tuple[int, int, int]:
     section) — render's own unconditional normalization target, read
     directly from config.json's render section every call, independent of
     any individual shot's own target format."""
-    config = json.loads((project_dir / "config.json").read_text())
-    render_config = config.get("render", {})
+    config_path = project_dir / "config.json"
+    render_config = {}
+    if config_path.exists():
+        config = json.loads(config_path.read_text())
+        render_config = config.get("render", {})
     width, height = _parse_resolution(render_config.get("resolution", _DEFAULT_RESOLUTION))
     fps = render_config.get("fps", _DEFAULT_FPS)
     return width, height, fps
