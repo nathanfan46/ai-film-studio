@@ -67,6 +67,13 @@ SHOT_SCHEMA = {
                 "music": GENERATION_STAGE_SCHEMA,
             },
         },
+        "format": {
+            "type": "object",
+            "properties": {
+                "resolution": {"type": "string"},
+                "fps": {"type": "number"},
+            },
+        },
     },
 }
 

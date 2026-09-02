@@ -42,6 +42,8 @@ class ImageGenerationRequest:
     num_candidates: int = 1
     reference_paths: list[str] = field(default_factory=list)
     output_path: str = ""
+    target_width: int = 0
+    target_height: int = 0
 
 
 @dataclass
@@ -67,6 +69,9 @@ class VideoGenerationRequest:
     output_path: str = ""
     suppress_captions: bool = True
     end_reference_path: str = ""
+    target_width: int = 0
+    target_height: int = 0
+    target_fps: int = 0
 
 
 @dataclass

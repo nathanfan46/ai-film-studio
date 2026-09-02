@@ -1,4 +1,4 @@
-from ai_film.models import ImageEditRequest, ImageGenerationRequest
+from ai_film.models import ImageEditRequest, ImageGenerationRequest, VideoGenerationRequest
 
 
 def test_image_generation_request_defaults_num_candidates_to_one():
@@ -22,3 +22,16 @@ def test_image_edit_request_is_immutable_reference_paths_per_instance():
     b = ImageEditRequest(base_image_path="y.png", instruction="b")
     a.reference_paths.append("z.png")
     assert b.reference_paths == []
+
+
+def test_video_generation_request_target_format_fields_default_to_zero():
+    request = VideoGenerationRequest(prompt="x", model="veo-3")
+    assert request.target_width == 0
+    assert request.target_height == 0
+    assert request.target_fps == 0
+
+
+def test_image_generation_request_target_format_fields_default_to_zero():
+    request = ImageGenerationRequest(prompt="x", model="nano-banana")
+    assert request.target_width == 0
+    assert request.target_height == 0

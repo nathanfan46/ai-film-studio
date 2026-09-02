@@ -89,3 +89,15 @@ def test_generation_stage_accepts_version_and_history():
         ],
     }
     assert validate_shot(shot) == []
+
+
+def test_shot_schema_accepts_optional_format_field():
+    shot = _valid_shot()
+    shot["format"] = {"resolution": "1280x720", "fps": 24}
+    assert validate_shot(shot) == []
+
+
+def test_shot_schema_accepts_missing_format_field():
+    shot = _valid_shot()
+    assert "format" not in shot
+    assert validate_shot(shot) == []

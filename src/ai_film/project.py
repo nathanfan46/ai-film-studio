@@ -23,7 +23,7 @@ DEFAULT_CONFIG = {
         "lipsync": {"provider": "fal", "model": "kling-lipsync", "parameters": {}},
     },
     "generation": {"max_attempts": 3, "max_parallel_jobs": 3, "poll_interval_seconds": 5},
-    "render": {},
+    "render": {"resolution": "1280x720", "fps": 24, "strict_format": False},
     "generation_approval": {},
 }
 

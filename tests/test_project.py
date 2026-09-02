@@ -37,3 +37,9 @@ def test_init_project_does_not_overwrite_existing_config(tmp_path: Path):
 
 def test_project_dirs_includes_review_directory():
     assert "07_review" in PROJECT_DIRS
+
+
+def test_default_config_includes_render_format_defaults(tmp_path: Path):
+    project_dir = init_project(tmp_path / "project", "Test Film")
+    config = json.loads((project_dir / "config.json").read_text())
+    assert config["render"] == {"resolution": "1280x720", "fps": 24, "strict_format": False}
