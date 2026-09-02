@@ -18,7 +18,7 @@ from ai_film.models import (
 )
 from ai_film.providers.fal.audio import FalAudioProvider, _speaker_id
 from ai_film.providers.fal.catalog import FalProviderCatalog
-from ai_film.providers.fal.image import FalImageProvider
+from ai_film.providers.fal.image import FalImageProvider, _image_format_fields
 from ai_film.providers.fal.lipsync import FalLipsyncProvider
 from ai_film.providers.fal.video import (
     MODELS_REQUIRING_RESIZED_REFERENCE, _nearest_aspect_ratio_enum, _resize_reference_for_target,
@@ -933,3 +933,46 @@ def test_fal_music_provider_parses_audio_file_field(mock_requests, tmp_path: Pat
     assert provider.poll(job) == JobStatus.COMPLETED
     result = provider.get_result(job)
     assert Path(result.artifact_path).read_bytes() == b"MUSIC-BYTES"
+
+
+def test_image_format_fields_for_nano_banana_sends_aspect_ratio_and_quality_tier():
+    fields = _image_format_fields("nano-banana", 1280, 720)
+    assert fields == {"aspect_ratio": "16:9", "resolution": "1K"}
+
+
+def test_image_format_fields_for_nano_banana_pro_has_no_half_k_tier():
+    # nano-banana-pro's real schema has no "0.5K" option (verified against
+    # its OpenAPI schema) — a small target must still snap to its lowest
+    # real tier, "1K", not an invalid "0.5K".
+    fields = _image_format_fields("nano-banana-pro", 100, 100)
+    assert fields["resolution"] == "1K"
+
+
+def test_image_format_fields_for_unknown_model_is_empty():
+    assert _image_format_fields("some-future-model", 1280, 720) == {}
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_image_provider_sends_format_fields_on_edit_call(mock_requests, tmp_path: Path, monkeypatch):
+    """nano-banana-2/edit's real schema also has aspect_ratio + resolution
+    (verified) — the reference-conditioned /edit path must get them too,
+    not just the base text-to-image path."""
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    _mock_submit_response(mock_requests)
+    reference = tmp_path / "ref.png"
+    reference.write_bytes(b"REF-PNG")
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file", lambda path: "https://cdn.fal.run/ref.png"
+    )
+
+    provider = FalImageProvider()
+    provider.submit(
+        ImageGenerationRequest(
+            prompt="a girl", model="nano-banana", reference_paths=[str(reference)],
+            output_path=str(tmp_path / "out.png"), target_width=1280, target_height=720,
+        )
+    )
+
+    sent_input = mock_requests.post.call_args.kwargs["json"]
+    assert sent_input["aspect_ratio"] == "16:9"
+    assert sent_input["resolution"] == "1K"
