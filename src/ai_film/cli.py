@@ -200,28 +200,43 @@ def _effective_spatial(path: Path, shot_id: str, shot_data: dict) -> dict:
     return {name: values for name, values in full_state.items() if name in shot_characters}
 
 
-def _shot_features(shot_data: dict) -> list[str]:
+def _shot_features(shot_data: dict, continue_from_previous: bool = False) -> list[str]:
     """Ordered, most-specific-first tags describing this shot, used only to
     key optional per-feature video-model overrides in config. Add a tag
     here whenever some model needs different handling for a class of shot
-    — today: "dialogue" vs "silent" (some models generate their own
-    uncontrollable talking motion/audio on shots with no assigned line at
-    all, not just ones with dialogue)."""
+    — today: "continue_from_previous" (this call passed
+    --continue-from-previous — only a model in MODELS_WITH_END_IMAGE_URL
+    actually benefits from the dual-keyframe continuity that flag sets up,
+    see providers/fal/video.py) ahead of "dialogue" vs "silent" (some
+    models generate their own uncontrollable talking motion/audio on shots
+    with no assigned line at all, not just ones with dialogue).
+    continue_from_previous is a per-call concern, not shot data, so it's
+    listed first but never replaces the dialogue/silent tag — both are
+    returned so a project can configure an override for one, the other, or
+    both, and the first one present in model_by_feature wins."""
+    features = []
+    if continue_from_previous:
+        features.append("continue_from_previous")
     if shot_data.get("dialogue", {}).get("text"):
-        return ["dialogue"]
-    return ["silent"]
+        features.append("dialogue")
+    else:
+        features.append("silent")
+    return features
 
 
-def _video_model(stage_config: dict, shot_data: dict) -> str:
+def _video_model(stage_config: dict, shot_data: dict, continue_from_previous: bool = False) -> str:
     """Pick which video model to use for a shot. `providers.video.model` is
     the default; an optional `providers.video.model_by_feature` maps a shot
     feature tag (see `_shot_features`) to an override model — e.g. a model
     prone to inventing its own talking motion can be kept off silent shots
     by defaulting elsewhere and opting it in only for `"dialogue"`, where a
-    lipsync pass fixes what it invents anyway. First matching feature wins;
-    falls back to the default model if no feature has an override."""
+    lipsync pass fixes what it invents anyway; or a model that honors
+    end_image_url can be opted in only for `"continue_from_previous"` so
+    dual-keyframe shots automatically get it without a project-wide model
+    change. First matching feature wins; falls back to the default model
+    if no feature has an override."""
     overrides = stage_config.get("model_by_feature", {})
-    for feature in _shot_features(shot_data):
+    for feature in _shot_features(shot_data, continue_from_previous):
         if feature in overrides:
             return overrides[feature]
     return stage_config["model"]
@@ -396,7 +411,8 @@ def generate_video_cmd(
         provider = resolve_provider(Capability.VIDEO, stage_config["provider"])
         return generate_video_service(
             project_dir=path, shot_path=shot_path, provider=provider,
-            prompt=build_video_prompt(shot_data), model=_video_model(stage_config, shot_data),
+            prompt=build_video_prompt(shot_data),
+            model=_video_model(stage_config, shot_data, continue_from_previous),
             reference_paths=references, duration_seconds=_video_duration(shot_data),
             output_path=path / "05_video" / f"{shot}.mp4",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],

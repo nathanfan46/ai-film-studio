@@ -1227,3 +1227,96 @@ def test_generate_video_without_flag_never_sets_end_reference_path(tmp_path: Pat
     result = runner.invoke(app, ["generate-video", "--shot", "S01_SH01", "--path", str(project_dir)])
     assert result.exit_code == 0, result.output
     assert provider.requests[-1].end_reference_path == ""
+
+
+def test_generate_video_continue_from_previous_uses_feature_override_model(
+    tmp_path: Path, monkeypatch
+):
+    """model_by_feature.continue_from_previous lets a project opt a
+    dual-keyframe-capable model in only for --continue-from-previous calls,
+    without flipping providers.video.model project-wide and back."""
+    project_dir = _init_mock_project(tmp_path)
+    _set_video_provider_config(
+        project_dir, model="veo-3", model_by_feature={"continue_from_previous": "h3-max"},
+    )
+    _approve(project_dir)
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(
+        app,
+        ["generate-video", "--shot", "S01_SH01", "--continue-from-previous", "--path", str(project_dir)],
+    )
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].model == "h3-max"
+
+
+def test_generate_video_without_continue_from_previous_flag_ignores_that_override(
+    tmp_path: Path, monkeypatch
+):
+    project_dir = _init_mock_project(tmp_path)
+    _set_video_provider_config(
+        project_dir, model="veo-3", model_by_feature={"continue_from_previous": "h3-max"},
+    )
+    _approve(project_dir)
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-video", "--shot", "S01_SH01", "--path", str(project_dir)])
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].model == "veo-3"
+
+
+def test_generate_video_continue_from_previous_takes_priority_over_dialogue_override(
+    tmp_path: Path, monkeypatch
+):
+    """continue_from_previous is checked before dialogue/silent (see
+    _shot_features's most-specific-first ordering) — a shot with both
+    dialogue text and --continue-from-previous set picks the
+    continue_from_previous override, not the dialogue one."""
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["dialogue"] = {"text": "hello there", "speaker": "girl"}
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _set_video_provider_config(
+        project_dir, model="veo-3",
+        model_by_feature={"dialogue": "hailuo-2.3", "continue_from_previous": "h3-max"},
+    )
+    _approve(project_dir)
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(
+        app,
+        ["generate-video", "--shot", "S01_SH01", "--continue-from-previous", "--path", str(project_dir)],
+    )
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].model == "h3-max"
+
+
+def test_generate_video_continue_from_previous_falls_back_to_dialogue_override_when_unconfigured(
+    tmp_path: Path, monkeypatch
+):
+    """No model_by_feature.continue_from_previous configured — the
+    dialogue tag still applies as the next-most-specific fallback."""
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["dialogue"] = {"text": "hello there", "speaker": "girl"}
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _set_video_provider_config(
+        project_dir, model="veo-3", model_by_feature={"dialogue": "hailuo-2.3"},
+    )
+    _approve(project_dir)
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(
+        app,
+        ["generate-video", "--shot", "S01_SH01", "--continue-from-previous", "--path", str(project_dir)],
+    )
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].model == "hailuo-2.3"

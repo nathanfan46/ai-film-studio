@@ -177,6 +177,39 @@ measured duration (once the voice is generated) instead of the shot's static
 `duration_seconds` — generate voice before video for a dialogue shot if you want them
 to end up the same length.
 
+`generate-video --continue-from-previous` starts a shot's video from the previous
+shot's last frame (extracted via ffmpeg) and pairs it with this shot's own locked
+storyboard image as an end frame — true dual-keyframe continuity, for a shot that
+should visibly continue the previous one's action instead of resetting on the cut.
+Only models in `MODELS_WITH_END_IMAGE_URL` (currently `h3-max`, verified against
+fal.ai's own OpenAPI schema) actually honor the end frame; other models still get the
+extracted last frame as their sole starting reference. It degrades gracefully — with
+no predecessor shot, no predecessor video yet, or no locked storyboard image yet, it
+falls back to normal single-image generation and prints why, never errors.
+
+**Video model selection is configurable per shot feature**, via `config.json`'s
+`providers.video.model_by_feature`, so you don't have to flip the project-wide
+default model back and forth for shots that need a different model's capabilities:
+
+```json
+"video": {
+  "model": "veo-3",
+  "model_by_feature": {
+    "dialogue": "hailuo-2.3",
+    "continue_from_previous": "h3-max"
+  }
+}
+```
+
+Recognized tags: `"dialogue"` / `"silent"` (whether the shot has spoken lines — some
+models invent their own uncontrollable talking motion on silent shots) and
+`"continue_from_previous"` (this call passed `--continue-from-previous` — pick a
+model that actually supports dual-keyframe generation only for those calls). The
+most specific matching tag wins (`continue_from_previous` is checked before
+`dialogue`/`silent`); a shot with no matching tag configured falls back to
+`providers.video.model`. See `_shot_features`/`_video_model` in `src/ai_film/cli.py`
+if you're adding a new tag.
+
 The last four are the media review layer, for reviewing generated video/audio and
 fixing cheap timing issues without a provider call:
 
