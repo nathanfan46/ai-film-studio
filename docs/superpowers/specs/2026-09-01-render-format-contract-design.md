@@ -42,6 +42,32 @@ Two related issues, discovered together:
   or testing this — both stay untouched and ungitignored, per this
   project's standing rule.
 
+## Terminology
+
+Four distinct formats appear below — naming them precisely up front avoids
+the ambiguity an earlier draft of this spec had:
+
+- **project default format** — `config.json`'s `render.resolution`/
+  `render.fps`. Used as the fallback when a shot has no `format` of its
+  own.
+- **shot target format** — `shot.json`'s `format.resolution`/`format.fps`
+  when present, else the project default. This is what generation asks
+  each provider adapter to aim for. `format` is an explicit **override**,
+  not a read-only copy of the project default — a shot MAY declare its own
+  target that differs from the project default (e.g. one hero shot at
+  1920x1080 while the rest of the project targets 1280x720).
+- **actual artifact format** — what `ffprobe` reports for the file a
+  provider actually returned. Almost never pixel-equal to the shot target
+  format (see the provider capability table below) — that's expected, not
+  a bug.
+- **final output format** — `config.json`'s `render.resolution`/
+  `render.fps` again, this time as render.py's unconditional target.
+  Same config keys as the project default, different role: every clip is
+  normalized to this at render time regardless of its own shot target or
+  actual artifact format — a shot targeting 1920x1080 still gets
+  downscaled into a 1280x720 final reel if that's the project's `render`
+  config.
+
 ## Non-goals (v1)
 
 - Migrating or mutating existing `shot.json` files to add `format`. Legacy
@@ -126,11 +152,15 @@ New helper `_resolve_target_format(path, shot_data) -> tuple[int, int, int]`
    `render` config is still `{}` (e.g. `ai-film init`'d before this change
    shipped, or never touched since) doesn't break.
 
-This resolved target threads into `generate_video_service`/
-`generate_image_service` via new `target_width`/`target_height`/
-`target_fps` fields on `VideoGenerationRequest`/`ImageGenerationRequest`
-(`models.py`), used both to build native provider params (Section 3) and
-to validate the actual artifact afterward (Section 4).
+This resolved target (the **shot target format**, per Terminology above)
+threads into `generate_video_service`/`generate_image_service` via new
+fields on `models.py`'s request dataclasses — `VideoGenerationRequest`
+gains `target_width`/`target_height`/`target_fps`, `ImageGenerationRequest`
+gains only `target_width`/`target_height` (images have no frame rate;
+carrying `target_fps` through the image path would be dead abstraction
+leakage the image provider could never use). Both are used to build native
+provider params (Section 3) and to validate the actual artifact afterward
+(Section 4).
 
 ### 3. Provider adapters derive native params from the target
 
@@ -168,57 +198,125 @@ uploaded in place of the raw reference path. Gated by a new
 "hailuo-2.3-fast"}` set, checked in `submit()` right before
 `client.upload_file()`.
 
+**What this actually communicates to the provider is the target's aspect
+ratio, not its exact pixel dimensions.** h3-max's own docs say the output
+"follows" the reference image's aspect ratio — they don't promise to
+reproduce its exact width/height, and hailuo makes no promise at all. The
+function resizes to the literal target `width`x`height` because that's
+the simplest way to produce a well-formed image carrying the right ratio
+(reusing render.py's own scale+pad technique rather than inventing a
+second one), not because the provider is expected to honor those exact
+pixels — it isn't, and Section 4's validation is designed around that
+fact.
+
 ### 4. Post-generation validation
 
 After `get_result()` downloads the artifact, `generate_video`/
-`generate_image` in `generation_service.py` probes the actual file (new
-shared `probe_resolution(path) -> tuple[int, int]`, following this
-codebase's established convention of a small ffprobe helper duplicated
-per module rather than centralized — see `_probe_duration`/
-`_has_audio_stream` in `video_diagnostics.py`/`video_fix.py`) and compares
-the exact `(width, height, fps)` tuple against the resolved target. No
-tolerance band or "close enough" heuristic — per the provider capability
-table above, no model can hit the literal target pixel-for-pixel, so an
-exact-equality check will flag a mismatch on most real generations by
-design. That is expected and intentional: it's precisely what makes
-`strict_format=false`'s default behavior ("warn, don't block") the right
-default, and it's what gives `strict_format=true` real teeth (a genuine,
-unambiguous non-negotiable check) once a production needs one:
+`generate_image` in `generation_service.py` probes the actual file:
 
-- **Exact match**: proceed, no note.
-- **Mismatch, `strict_format=false` (the default)**: the artifact dict
-  gains `"requested_format": {"width": .., "height": .., "fps": ..},
-  "actual_format": {"width": .., "height": .., "fps": ..},
-  "format_mismatch": true`; a warning is printed but generation is marked
-  `completed` as normal. This mirrors how duration snapping already
-  behaves — a provider not hitting the literal requested value is expected
-  behavior, not an error.
-- **Mismatch, `strict_format=true`**: raise the existing `ProviderError`
-  (already caught by `_run_generation`'s try/except in `cli.py`) —
-  generation is marked `failed`, no artifact is persisted, exactly like
-  any other provider failure today.
+- `probe_resolution(path) -> tuple[int, int]` — pixel width/height.
+- `probe_fps(path) -> Fraction` — parses ffprobe's `r_frame_rate` stream
+  entry (e.g. `"24/1"`, `"24000/1001"`) as a `fractions.Fraction`, never
+  coerced through `float`/`int` first. A provider returning 23.976fps
+  (`24000/1001`) must never be silently reported as a false "24 fps"
+  match, and must never be misreported as further off-target than it
+  actually is by rounding error either. Display values (for warnings,
+  preflight, artifact metadata) are formatted from the `Fraction` as
+  3-decimal text, e.g. `"23.976"`, not the raw ffprobe string.
+
+Both probes join this codebase's established convention of a small
+ffprobe helper duplicated per module rather than centralized (see
+`_probe_duration`/`_has_audio_stream` in `video_diagnostics.py`/
+`video_fix.py`).
+
+**Recording (always on, regardless of `strict_format`):** the artifact
+dict always gains
+`"requested_format": {"width": .., "height": .., "fps": "24.000"},
+"actual_format": {"width": .., "height": .., "fps": "23.976"}`. This is
+diagnostic metadata, not a pass/fail signal by itself — Section 7's
+preflight report reads these same fields to build its per-shot table.
+
+**Gating (what `strict_format` actually checks):** exact `(width, height,
+fps)` equality is the wrong check to gate on. Per the provider capability
+table above, no model can hit the literal target pixel-for-pixel, and fps
+is not even a provider-controllable field (see the note in "Provider
+format capabilities") — so exact-equality gating would make
+`strict_format=true` fail *every* real Hailuo/H3-max generation for
+reasons that have nothing to do with a real defect, defeating the entire
+point of the per-model snapping in Section 3. `strict_format` therefore
+checks only **aspect ratio compatibility** — the one property every
+adapter is actually expected to hit closely, whether via a direct
+`aspect_ratio` field (veo-3) or the resized reference image (h3-max/
+hailuo, Section 3):
+
+```python
+actual_ratio = actual_width / actual_height
+target_ratio = target_width / target_height
+relative_error = abs(actual_ratio - target_ratio) / target_ratio
+```
+
+- **`relative_error` within a fixed 2% tolerance** (covers ordinary
+  provider-side rounding, e.g. h3-max's 768P tier landing on 1344x768 or
+  1376x768 for a 1280x720/16:9 target): proceed, no note, in either mode.
+- **`relative_error` beyond 2%** — e.g. a 16:9 target paired with an
+  actual 4:3 or 9:16 artifact, indicating a real adapter bug, a provider
+  ignoring/dropping the aspect ratio field, or a reference image that
+  never actually got resized:
+  - `strict_format=false` (the default): record `format_mismatch: true`
+    alongside the always-on metadata above, print a warning, generation
+    still marked `completed`.
+  - `strict_format=true`: raise the existing `ProviderError` (already
+    caught by `_run_generation`'s try/except in `cli.py`) — generation is
+    marked `failed`, no artifact is persisted, exactly like any other
+    provider failure today.
+- Resolution and fps differences **never** raise, in either mode — they
+  are expected, always recorded (per "Recording" above), and always
+  resolved later by render.py's unconditional normalization (Section 5),
+  which is the one point in the pipeline where an exact final size is
+  actually enforced.
 
 ### 5. `render.py` stays the defensive final boundary
 
 - Replace concat-demuxer + `-c copy` with `filter_complex` + re-encode:
-  every clip gets `scale=W:H:force_original_aspect_ratio=decrease,
-  pad=W:H:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=F`; each clip's audio is passed
-  through or replaced with an `anullsrc` pad sized to that clip's *real*
-  ffprobe'd duration (not the shot's static `duration_seconds`, which this
-  project already knows can drift from the actual file); then
+  every clip's video gets `scale=W:H:force_original_aspect_ratio=decrease,
+  pad=W:H:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=F`. Every clip's audio is
+  normalized too, not just made *present* — the original bug report is
+  about silent-vs-audio-bearing clips, but real shots can also mix mono,
+  stereo, and multichannel tracks (voice/sfx/lipsync sources aren't
+  guaranteed to agree), and `concat`'s audio side needs matching
+  parameters same as its video side. A clip with an audio stream gets
+  `aformat=sample_rates=48000:channel_layouts=stereo`; a clip without one
+  gets `anullsrc=channel_layout=stereo:sample_rate=48000` trimmed to that
+  clip's *real* ffprobe'd duration (not the shot's static
+  `duration_seconds`, which this project already knows can drift from the
+  actual file) — both land on the same canonical 48kHz/stereo before
   `concat=n=N:v=1:a=1`; output re-encoded `libx264`/`aac`.
 - `W, H, F` for render come from `config.json`'s `render.resolution`/
-  `render.fps` (defaulting to 1280x720/24) — render always targets one
-  canonical deliverable size regardless of what any individual shot
-  declared or a provider actually returned; there is no per-shot override
+  `render.fps` (defaulting to 1280x720/24) — this is the **final output
+  format** (Terminology above): render always targets one canonical
+  deliverable size regardless of what any individual shot's target format
+  was or what a provider actually returned; there is no per-shot override
   at render time.
 - `_escape_concat_path` and the concat-list file are removed. ffmpeg
   inputs become direct subprocess argv elements (list form, not a shell
   string), so there is nothing left to shell-escape.
 - New `preflight_warnings(manifest, project_dir) -> list[str]`: non-fatal,
-  ffprobe-based, reports the spread of actual clip resolutions and which
-  shots have no audio stream. Printed by `render_cmd`, never blocks —
-  render's own normalization already handles both cases correctly.
+  ffprobe-based, one line per shot plus a final summary line, e.g.:
+
+  ```
+  S01_SH01: declared 1280x720@24.000, actual 1280x720@24.000, audio: yes
+  S01_SH02: declared 1280x720@24.000, actual 1408x768@23.976, audio: no (padded with silence)
+  S01_SH03: declared 1280x720@24.000, actual 1344x768@24.000, audio: yes
+  final output format: 1280x720@24 (from config.json render.resolution/fps)
+  ```
+
+  "declared" is the shot target format (Section 2); "actual" is read via
+  the same `probe_resolution`/`probe_fps` helpers Section 4 uses — if the
+  manifest shot already carries `requested_format`/`actual_format` from
+  generation-time validation, reuse those values directly instead of
+  re-probing the file a second time. Printed by `render_cmd`, never
+  blocks — render's own normalization already handles every case shown
+  here correctly.
 
 ### 6. Testing
 
@@ -226,18 +324,28 @@ unambiguous non-negotiable check) once a production needs one:
   request body gets the right native fields for a given target (same
   style as the existing `test_h3_max_sends_integer_duration_and_prompt_
   expansion_mode`); a real-ffmpeg test for `_resize_reference_for_target`
-  asserting the output has the target's exact pixel dimensions regardless
-  of the source image's own shape.
-- `generation_service.py`: mismatch-detection tests for both
-  `strict_format` values, using a mock provider whose returned artifact's
-  real (ffprobe'd) size differs from the resolved target.
+  asserting the output image is exactly `width`x`height` (the function's
+  own literal output contract), independent of whether a downstream
+  provider is later expected to honor that exact size.
+- `generation_service.py`: aspect-ratio mismatch-detection tests for both
+  `strict_format` values (mock provider returning an artifact whose real,
+  ffprobe'd aspect ratio differs from the target beyond the 2% tolerance),
+  plus a same-aspect-ratio/different-resolution case (e.g. target
+  1280x720, actual 1344x768) confirming it never raises in either mode —
+  the regression this section exists to prevent.
 - `render.py`: real-ffmpeg tests mixing (a) clips of different native
   resolutions, (b) silent and audio-bearing clips in the same render,
   asserting the final output has both video and genuinely non-silent
-  audio; `preflight_warnings` tests for both mismatch kinds.
+  audio; a mixed mono/stereo/silent-clip test confirming `concat` doesn't
+  regress once three different audio layouts meet at the same boundary;
+  an fps-normalization test mixing clips at 24fps, 23.976fps (`24000/
+  1001`), and 30fps, asserting the final output is uniformly the
+  configured `render.fps`; `preflight_warnings` tests covering both a
+  resolution/fps spread and a missing-audio shot.
 - `cli.py`: `_resolve_target_format`/`parse_resolution` tests — shot.json
-  format present, absent with a configured `render` fallback, absent with
-  an empty `render: {}` (hardcoded default).
+  format present (including a shot deliberately overriding the project
+  default), absent with a configured `render` fallback, absent with an
+  empty `render: {}` (hardcoded default).
 - Full suite must stay green throughout (358 passing as of this spec).
 
 ### 7. Docs
