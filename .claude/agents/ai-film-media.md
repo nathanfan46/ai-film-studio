@@ -76,6 +76,16 @@ ai-film generate-video --shot SHOT_ID
 
 **Never skip `generate-video`/`generate-voice` because an artifact already exists.** Both are idempotent at the engine level — a stage whose `status` is already `"completed"` returns immediately with no new provider call and no new spend. Running both unconditionally (in the order above) is therefore free for stages already done, and it's what correctly fills in a stage that's genuinely still missing — e.g. a shot whose video completed in an earlier run but whose voice never got generated (an interrupted run, or dialogue added afterward). Treating "video exists, so skip generation" as a shortcut would silently leave that voice track ungenerated forever — and would also mean a still-missing voice never gets the chance to size the video that comes after it.
 
+**A `format_mismatch: true` flag on a video/image artifact is informational, not
+actionable.** `generate-video`/`generate-image` record the shot's requested production
+format alongside whatever a provider actually returned, and print a warning line when
+the actual aspect ratio deviates from the target by more than a small tolerance — this
+reflects real, expected provider behavior (no video/image model this project uses can
+hit an exact target resolution), not a defect to fix. Don't regenerate a shot solely
+because of this flag; only look into it if the human directly asks why a shot looks
+visually off, since `render` normalizes every clip's resolution/aspect ratio/fps
+unconditionally at final-render time regardless of this flag.
+
 **Then, only for a dialogue shot, only if it isn't already synced:** read `generation.video.artifact.lipsynced` from the shot's JSON (it's `true` only when the *current* video artifact already went through a lip-sync pass — a plain video regeneration always produces a fresh artifact with no such key at all, so this check is always accurate, never stale). If it's missing or `false`:
 
 ```bash

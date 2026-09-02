@@ -88,6 +88,25 @@ Write one file per shot at `03_shots/S<SS>_SH<NN>.json` (`<SS>` = 2-digit scene 
 
 After writing a scene's shot files, run `ai-film validate` and fix anything it reports before moving on.
 
+**Populate the shot's production format.** Every new shot.json this step writes should
+include a `format` field resolved from the project's `config.json`:
+
+```json
+"format": {
+  "resolution": "<config.json's render.resolution>",
+  "fps": <config.json's render.fps>
+}
+```
+
+This is optional at the schema level (older shots without it fall back to
+`config.json`'s `render` defaults automatically at generation time — nothing breaks if
+it's ever missing), but every shot this agent writes going forward should carry it
+explicitly, so `shot.json` stays a self-contained production contract rather than
+depending on the project's current config at generation time. Only set this to
+something other than the project default if the human has explicitly asked for a
+different format for this specific shot (e.g. one hero shot at a higher resolution) —
+otherwise, always mirror `config.json`'s current `render` values.
+
 **Scene spatial canon, for a scene's first shot only:** when you write the very first shot of a scene (`S<SS>_SH01`), decide each on-screen character's initial blocking — which side of frame they're on and which way they face — before writing that shot's `action` text, so the action can describe the same layout you're about to record. Record it with one `set-scene-continuity` call per on-screen character, plus `--master-shot` on at least one of those calls:
 
 ```bash

@@ -187,6 +187,18 @@ extracted last frame as their sole starting reference. It degrades gracefully �
 no predecessor shot, no predecessor video yet, or no locked storyboard image yet, it
 falls back to normal single-image generation and prints why, never errors.
 
+`shot.json` may declare an optional `format` object (`{"resolution": "1280x720", "fps":
+24}`) — an explicit per-shot override of the project's production format. Most shots
+don't need one: `config.json`'s `render.resolution`/`render.fps` (default `1280x720`/`24`)
+is the project default every shot without its own `format` inherits, and it's also what
+`render` unconditionally normalizes every clip to at final-render time regardless of any
+shot's own target or what a provider actually returned. `render.strict_format` (default
+`false`) makes a generation call fail if the actual artifact's aspect ratio deviates from
+its target by more than 2% — resolution and fps differences never fail generation in
+either mode, since no fal model used by this project can hit an exact target pixel size
+or frame rate (verified against each model's own schema); `render` is what actually
+enforces the exact final size.
+
 **Video model selection is configurable per shot feature**, via `config.json`'s
 `providers.video.model_by_feature`, so you don't have to flip the project-wide
 default model back and forth for shots that need a different model's capabilities:
@@ -233,7 +245,8 @@ ai-film review-media --shot S01_SH01 --path ~/my-film
 `ai-film init` scaffolds:
 
 ```
-config.json                 # provider/model selection, approval state, generation settings
+config.json                 # provider/model selection, approval state, generation settings,
+                             #   render.resolution/render.fps/render.strict_format (production format)
 assets/                     # reference images (characters, environments, props, fonts)
   characters/<name>/          # candidates.json + candidates/*.png + reference.png once locked
   environments/<name>/        # same layout as characters/
@@ -257,8 +270,6 @@ records each one.
 
 ## Known limitations (v1)
 
-- **`render` drops audio.** Voice/sfx/music generate and save to disk correctly, but
-  the render manifest doesn't include them yet — the final video is video-only.
 - **No crash-safety for in-flight jobs.** A killed process mid-generation loses track
   of the paid job it just submitted; a re-run will resubmit and pay again.
 - **No backoff or timeout on provider polling** — a stuck job can hang a `generate-*`
