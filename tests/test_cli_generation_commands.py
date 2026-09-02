@@ -1359,3 +1359,84 @@ def test_generate_video_continue_from_previous_falls_back_to_dialogue_override_w
     )
     assert result.exit_code == 0, result.output
     assert provider.requests[-1].model == "hailuo-2.3"
+
+
+def test_generate_video_passes_resolved_target_format_to_provider(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    _approve(project_dir)
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-video", "--shot", "S01_SH01", "--path", str(project_dir)])
+
+    assert result.exit_code == 0, result.output
+    request = provider.requests[-1]
+    assert request.target_width == 1280
+    assert request.target_height == 720
+    assert request.target_fps == 24
+
+
+def test_generate_video_uses_shot_format_override(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["format"] = {"resolution": "1920x1080", "fps": 30}
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _approve(project_dir)
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-video", "--shot", "S01_SH01", "--path", str(project_dir)])
+
+    assert result.exit_code == 0, result.output
+    request = provider.requests[-1]
+    assert request.target_width == 1920
+    assert request.target_height == 1080
+    assert request.target_fps == 30
+
+
+def test_generate_image_passes_resolved_target_format_to_provider(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    _approve(project_dir)
+    provider = _RecordingImageProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(app, ["generate-image", "--shot", "S01_SH01", "--path", str(project_dir)])
+
+    assert result.exit_code == 0, result.output
+    request = provider.requests[-1]
+    assert request.target_width == 1280
+    assert request.target_height == 720
+
+
+def test_generate_video_prints_warning_on_format_mismatch(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    # generation_service.generate_video skips format validation entirely when
+    # provider_name == "mock" (see Task 3's Global Constraints guard — the mock
+    # provider writes placeholder bytes ffprobe can't read). _init_mock_project
+    # sets every stage's config provider to "mock", so this one test switches
+    # video's config provider string to "fal" — the actual provider OBJECT
+    # used is still the fake _RecordingVideoProvider below, injected via the
+    # resolve_provider monkeypatch; only the provider_name string that flows
+    # into generate_video's skip-guard needs to read "fal" here.
+    config = json.loads((project_dir / "config.json").read_text())
+    config["providers"]["video"]["provider"] = "fal"
+    (project_dir / "config.json").write_text(json.dumps(config))
+    _approve(project_dir)
+
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+    # Force the service layer's validation to report a mismatch without needing
+    # a real ffmpeg-generated file: patch _apply_video_format_validation directly.
+    monkeypatch.setattr(
+        "ai_film.services.generation_service._apply_video_format_validation",
+        lambda artifact, *a, **k: {**artifact, "format_mismatch": True,
+                                    "requested_format": {"width": 1280, "height": 720},
+                                    "actual_format": {"width": 1080, "height": 1080}},
+    )
+
+    result = runner.invoke(app, ["generate-video", "--shot", "S01_SH01", "--path", str(project_dir)])
+
+    assert result.exit_code == 0, result.output
+    assert "format mismatch" in result.output
+    assert "1280x720" in result.output
+    assert "1080x1080" in result.output

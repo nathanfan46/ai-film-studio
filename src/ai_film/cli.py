@@ -190,6 +190,16 @@ def _run_generation(shot_id: str, stage_name: str, run_fn) -> None:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
     typer.echo(f"{shot_id}: {stage_name} {result['status']}")
+    artifact = result.get("artifact") or {}
+    if artifact.get("format_mismatch"):
+        requested = artifact.get("requested_format", {})
+        actual = artifact.get("actual_format", {})
+        typer.echo(
+            f"{shot_id}: {stage_name} format mismatch — requested "
+            f"{requested.get('width')}x{requested.get('height')}, got "
+            f"{actual.get('width')}x{actual.get('height')}",
+            err=True,
+        )
 
 
 def _character_and_environment_references(path: Path, shot_data: dict) -> list[str]:
@@ -344,6 +354,8 @@ def generate_image_cmd(
     shot_path = path / "03_shots" / f"{shot}.json"
     shot_data = load_shot(shot_path)
     references = _image_references(path, shot, shot_data)
+    target_width, target_height, _target_fps = _resolve_target_format(path, shot_data)
+    strict_format = _strict_format(path)
 
     def _run():
         provider = resolve_provider(Capability.IMAGE, stage_config["provider"])
@@ -354,6 +366,7 @@ def generate_image_cmd(
             reference_paths=references, output_path=path / "04_storyboard" / f"{shot}.png",
             provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
+            target_width=target_width, target_height=target_height, strict_format=strict_format,
         )
 
     _run_generation(shot, "image", _run)
@@ -445,6 +458,8 @@ def generate_video_cmd(
         references, end_reference_path = _continue_from_previous_references(path, shot, shot_data)
     else:
         references, end_reference_path = _video_references(path, shot_data), ""
+    target_width, target_height, target_fps = _resolve_target_format(path, shot_data)
+    strict_format = _strict_format(path)
 
     def _run():
         provider = resolve_provider(Capability.VIDEO, stage_config["provider"])
@@ -458,6 +473,8 @@ def generate_video_cmd(
             poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
             suppress_captions=not stage_config.get("parameters", {}).get("captions", False),
             end_reference_path=end_reference_path,
+            target_width=target_width, target_height=target_height, target_fps=target_fps,
+            strict_format=strict_format,
         )
 
     _run_generation(shot, "video", _run)
