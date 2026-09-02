@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from fractions import Fraction
 from pathlib import Path
 from typing import Callable, TypeVar
 
@@ -157,6 +158,7 @@ def run_generation_stage(
             poll_interval_seconds=poll_interval_seconds,
             on_attempt=on_attempt,
         )
+        artifact = result_to_artifact(job_result.result)
     except ProviderError:
         if archive.restore:
             archive.restore()
@@ -170,7 +172,6 @@ def run_generation_stage(
         save_shot(shot_path, shot)
         raise
 
-    artifact = result_to_artifact(job_result.result)
     if artifact.get("path"):
         artifact = {**artifact, "path": project_relative_path(artifact["path"], project_dir)}
     shot["generation"][stage] = {
@@ -231,6 +232,104 @@ def _lipsync_video_artifact(result) -> dict:
     return artifact
 
 
+_ASPECT_RATIO_TOLERANCE = 0.02
+
+
+def _probe_resolution(path: Path) -> tuple[int, int]:
+    probe = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", str(path),
+        ],
+        capture_output=True, text=True,
+    )
+    width_str, height_str = probe.stdout.strip().split("x")
+    return int(width_str), int(height_str)
+
+
+def _probe_fps(path: Path) -> Fraction:
+    probe = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=r_frame_rate", "-of", "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        capture_output=True, text=True,
+    )
+    return Fraction(probe.stdout.strip())
+
+
+def _format_mismatch(target_width: int, target_height: int, actual_width: int, actual_height: int) -> bool:
+    """True if the actual aspect ratio deviates from the target by more
+    than _ASPECT_RATIO_TOLERANCE. Deliberately checks aspect ratio only,
+    never exact resolution — no fal model this project uses can hit an
+    exact target pixel size (see the design spec's provider capability
+    table), so gating on exact equality would make strict_format=true
+    fail every real generation regardless of whether anything is
+    actually wrong."""
+    target_ratio = target_width / target_height
+    actual_ratio = actual_width / actual_height
+    return abs(actual_ratio - target_ratio) / target_ratio > _ASPECT_RATIO_TOLERANCE
+
+
+def _apply_video_format_validation(
+    artifact: dict, artifact_path: Path, target_width: int, target_height: int,
+    target_fps: int, strict_format: bool,
+) -> dict:
+    """When a real target was resolved (target_width/target_height both
+    non-zero), probe the actual artifact and record requested vs. actual
+    format on it — always, regardless of strict_format. Raises
+    ProviderError only when strict_format is true AND the aspect ratio is
+    outside tolerance; resolution/fps differences never raise in either
+    mode, since render.py's own unconditional normalization is what
+    actually enforces an exact final size."""
+    if not target_width or not target_height:
+        return artifact
+    actual_width, actual_height = _probe_resolution(artifact_path)
+    actual_fps = _probe_fps(artifact_path)
+    artifact = {
+        **artifact,
+        "requested_format": {
+            "width": target_width, "height": target_height,
+            "fps": f"{float(target_fps):.3f}" if target_fps else None,
+        },
+        "actual_format": {
+            "width": actual_width, "height": actual_height, "fps": f"{float(actual_fps):.3f}",
+        },
+    }
+    if _format_mismatch(target_width, target_height, actual_width, actual_height):
+        artifact["format_mismatch"] = True
+        if strict_format:
+            raise ProviderError(
+                f"aspect ratio mismatch: requested {target_width}x{target_height}, "
+                f"got {actual_width}x{actual_height} (exceeds {_ASPECT_RATIO_TOLERANCE:.0%} tolerance)"
+            )
+    return artifact
+
+
+def _apply_image_format_validation(
+    artifact: dict, artifact_path: Path, target_width: int, target_height: int, strict_format: bool,
+) -> dict:
+    """Same as _apply_video_format_validation, minus fps — images have no
+    frame rate to probe or record."""
+    if not target_width or not target_height:
+        return artifact
+    actual_width, actual_height = _probe_resolution(artifact_path)
+    artifact = {
+        **artifact,
+        "requested_format": {"width": target_width, "height": target_height},
+        "actual_format": {"width": actual_width, "height": actual_height},
+    }
+    if _format_mismatch(target_width, target_height, actual_width, actual_height):
+        artifact["format_mismatch"] = True
+        if strict_format:
+            raise ProviderError(
+                f"aspect ratio mismatch: requested {target_width}x{target_height}, "
+                f"got {actual_width}x{actual_height} (exceeds {_ASPECT_RATIO_TOLERANCE:.0%} tolerance)"
+            )
+    return artifact
+
+
 def generate_image(
     project_dir: Path,
     shot_path: Path,
@@ -243,17 +342,30 @@ def generate_image(
     max_attempts: int = 3,
     poll_interval_seconds: float = 0.0,
     force: bool = False,
+    target_width: int = 0,
+    target_height: int = 0,
+    strict_format: bool = False,
 ) -> dict:
     request = ImageGenerationRequest(
         prompt=prompt, model=model, reference_paths=reference_paths,
-        output_path=str(output_path),
+        output_path=str(output_path), target_width=target_width, target_height=target_height,
     )
+    validate = target_width and target_height and provider_name != "mock"
+
+    def _artifact(result):
+        artifact = _image_artifact(result)
+        if validate:
+            artifact = _apply_image_format_validation(
+                artifact, Path(result.artifact_path), target_width, target_height, strict_format,
+            )
+        return artifact
+
     return run_generation_stage(
         project_dir=project_dir, shot_path=shot_path, stage="image",
         scope=_SCOPE_BY_STAGE["image"],
         submit_fn=lambda: provider.submit(request),
         poll_fn=provider.poll, get_result_fn=provider.get_result,
-        result_to_artifact=_image_artifact,
+        result_to_artifact=_artifact,
         provider_name=provider_name, model_name=model,
         max_attempts=max_attempts, poll_interval_seconds=poll_interval_seconds,
         force=force,
@@ -275,18 +387,34 @@ def generate_video(
     force: bool = False,
     suppress_captions: bool = True,
     end_reference_path: str = "",
+    target_width: int = 0,
+    target_height: int = 0,
+    target_fps: int = 0,
+    strict_format: bool = False,
 ) -> dict:
     request = VideoGenerationRequest(
         prompt=prompt, model=model, reference_paths=reference_paths,
         duration_seconds=duration_seconds, output_path=str(output_path),
         suppress_captions=suppress_captions, end_reference_path=end_reference_path,
+        target_width=target_width, target_height=target_height, target_fps=target_fps,
     )
+    validate = target_width and target_height and provider_name != "mock"
+
+    def _artifact(result):
+        artifact = _video_or_audio_artifact(result)
+        if validate:
+            artifact = _apply_video_format_validation(
+                artifact, Path(result.artifact_path), target_width, target_height,
+                target_fps, strict_format,
+            )
+        return artifact
+
     return run_generation_stage(
         project_dir=project_dir, shot_path=shot_path, stage="video",
         scope=_SCOPE_BY_STAGE["video"],
         submit_fn=lambda: provider.submit(request),
         poll_fn=provider.poll, get_result_fn=provider.get_result,
-        result_to_artifact=_video_or_audio_artifact,
+        result_to_artifact=_artifact,
         provider_name=provider_name, model_name=model,
         max_attempts=max_attempts, poll_interval_seconds=poll_interval_seconds,
         force=force,

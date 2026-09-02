@@ -5,12 +5,20 @@ from pathlib import Path
 import pytest
 
 from ai_film.approval import approve_generation
-from ai_film.errors import CostGateError
+from ai_film.errors import CostGateError, ProviderError
+from ai_film.models import (
+    Capability,
+    GenerationJob,
+    ImageGenerationResult,
+    JobStatus,
+    VideoGenerationResult,
+)
 from ai_film.providers.mock.image import MockImageProvider
 from ai_film.services.generation_service import (
     _MIN_LIPSYNC_AUDIO_SECONDS,
     _pad_audio_if_too_short,
     generate_image,
+    generate_video,
 )
 from ai_film.shot_store import load_shot, save_shot
 
@@ -342,3 +350,191 @@ def test_pad_audio_if_too_short_is_a_noop_without_ffmpeg(tmp_path: Path, monkeyp
     _pad_audio_if_too_short(clip)  # must not raise
 
     assert clip.read_bytes() == b"NOT-REALLY-AUDIO"
+
+
+def _make_real_video(path: Path, width: int, height: int, fps: int = 24, duration: float = 1.0) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-f", "lavfi",
+            "-i", f"testsrc=duration={duration}:size={width}x{height}:rate={fps}",
+            str(path),
+        ],
+        check=True, capture_output=True,
+    )
+
+
+def _make_real_image(path: Path, width: int, height: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=black:s={width}x{height}:d=1", "-frames:v", "1", str(path)],
+        check=True, capture_output=True,
+    )
+
+
+class _RealFileVideoProvider:
+    """Writes a real, ffprobe-readable video at a caller-controlled
+    resolution/fps, unlike MockVideoProvider (which writes placeholder
+    bytes) — needed to exercise format validation against a genuinely
+    known actual size."""
+
+    def __init__(self, width: int, height: int, fps: int = 24):
+        self.width, self.height, self.fps = width, height, fps
+        self._requests: dict[str, object] = {}
+        self._n = 0
+
+    def submit(self, request):
+        self._n += 1
+        job_id = f"real-video-{self._n}"
+        self._requests[job_id] = request
+        return GenerationJob(provider="test", id=job_id, capability=Capability.VIDEO)
+
+    def poll(self, job):
+        return JobStatus.COMPLETED
+
+    def get_result(self, job):
+        request = self._requests[job.id]
+        output_path = Path(request.output_path)
+        _make_real_video(output_path, self.width, self.height, self.fps, request.duration_seconds)
+        return VideoGenerationResult(
+            artifact_path=str(output_path), size_bytes=output_path.stat().st_size,
+            duration_seconds=request.duration_seconds,
+        )
+
+
+class _RealFileImageProvider:
+    def __init__(self, width: int, height: int):
+        self.width, self.height = width, height
+        self._requests: dict[str, object] = {}
+        self._n = 0
+
+    def submit(self, request):
+        self._n += 1
+        job_id = f"real-image-{self._n}"
+        self._requests[job_id] = request
+        return GenerationJob(provider="test", id=job_id, capability=Capability.IMAGE)
+
+    def poll(self, job):
+        return JobStatus.COMPLETED
+
+    def get_result(self, job):
+        request = self._requests[job.id]
+        output_path = Path(request.output_path)
+        _make_real_image(output_path, self.width, self.height)
+        return ImageGenerationResult(artifact_path=str(output_path), size_bytes=output_path.stat().st_size)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_generate_video_records_format_metadata_on_close_match(tmp_path: Path):
+    project_dir = _project(tmp_path)
+    shot_path = _shot_path(project_dir)
+    approve_generation(project_dir, "storyboard", ["S01_SH01"], estimated_cost=0.1)
+
+    stage = generate_video(
+        project_dir=project_dir, shot_path=shot_path,
+        provider=_RealFileVideoProvider(width=1344, height=768, fps=24),
+        prompt="x", model="h3-max", reference_paths=[],
+        duration_seconds=2.0, output_path=project_dir / "05_video" / "S01_SH01.mp4",
+        provider_name="fal", target_width=1280, target_height=720, target_fps=24,
+    )
+
+    artifact = stage["artifact"]
+    assert artifact["requested_format"] == {"width": 1280, "height": 720, "fps": "24.000"}
+    assert artifact["actual_format"]["width"] == 1344
+    assert artifact["actual_format"]["height"] == 768
+    assert "format_mismatch" not in artifact  # 1344x768 is within 2% of 1280x720's aspect ratio
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_generate_video_default_records_mismatch_without_raising(tmp_path: Path):
+    project_dir = _project(tmp_path)
+    shot_path = _shot_path(project_dir)
+    approve_generation(project_dir, "storyboard", ["S01_SH01"], estimated_cost=0.1)
+
+    stage = generate_video(
+        project_dir=project_dir, shot_path=shot_path,
+        provider=_RealFileVideoProvider(width=720, height=1280, fps=24),  # portrait, wrong ratio entirely
+        prompt="x", model="hailuo-2.3", reference_paths=[],
+        duration_seconds=2.0, output_path=project_dir / "05_video" / "S01_SH01.mp4",
+        provider_name="fal", target_width=1280, target_height=720, target_fps=24,
+        strict_format=False,
+    )
+
+    assert stage["status"] == "completed"
+    assert stage["artifact"]["format_mismatch"] is True
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_generate_video_strict_format_raises_and_restores_on_aspect_ratio_mismatch(tmp_path: Path):
+    project_dir = _project(tmp_path)
+    shot_path = _shot_path(project_dir)
+    approve_generation(project_dir, "storyboard", ["S01_SH01"], estimated_cost=0.1)
+
+    with pytest.raises(ProviderError):
+        generate_video(
+            project_dir=project_dir, shot_path=shot_path,
+            provider=_RealFileVideoProvider(width=720, height=1280, fps=24),
+            prompt="x", model="hailuo-2.3", reference_paths=[],
+            duration_seconds=2.0, output_path=project_dir / "05_video" / "S01_SH01.mp4",
+            provider_name="fal", target_width=1280, target_height=720, target_fps=24,
+            strict_format=True,
+        )
+
+    shot = load_shot(shot_path)
+    assert shot["generation"]["video"]["status"] == "failed"
+    assert shot["generation"]["video"].get("artifact") is None  # never persisted
+
+
+def test_generate_video_skips_format_validation_for_mock_provider(tmp_path: Path):
+    """The mock provider writes placeholder bytes ffprobe can't read —
+    validation must never run against it, target_width/height or not."""
+    from ai_film.providers.mock.video import MockVideoProvider
+
+    project_dir = _project(tmp_path)
+    shot_path = _shot_path(project_dir)
+    approve_generation(project_dir, "storyboard", ["S01_SH01"], estimated_cost=0.1)
+
+    stage = generate_video(
+        project_dir=project_dir, shot_path=shot_path, provider=MockVideoProvider(),
+        prompt="x", model="veo-3", reference_paths=[],
+        duration_seconds=2.0, output_path=project_dir / "05_video" / "S01_SH01.mp4",
+        provider_name="mock", target_width=1280, target_height=720, target_fps=24,
+    )
+
+    assert stage["status"] == "completed"
+    assert "requested_format" not in stage["artifact"]
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_generate_image_strict_format_raises_on_aspect_ratio_mismatch(tmp_path: Path):
+    project_dir = _project(tmp_path)
+    shot_path = _shot_path(project_dir)
+    approve_generation(project_dir, "storyboard", ["S01_SH01"], estimated_cost=0.1)
+
+    with pytest.raises(ProviderError):
+        generate_image(
+            project_dir=project_dir, shot_path=shot_path,
+            provider=_RealFileImageProvider(width=1080, height=1080),  # square, way off 16:9
+            prompt="x", model="nano-banana", reference_paths=[],
+            output_path=project_dir / "04_storyboard" / "S01_SH01.png",
+            provider_name="fal", target_width=1280, target_height=720, strict_format=True,
+        )
+
+
+def test_generate_video_no_target_skips_validation_entirely(tmp_path: Path):
+    """target_width/target_height left at their 0 default (no caller
+    resolved a target) — validation is a pure no-op, matching every
+    pre-existing generate_video call site until Task 6 lands."""
+    from ai_film.providers.mock.video import MockVideoProvider
+
+    project_dir = _project(tmp_path)
+    shot_path = _shot_path(project_dir)
+    approve_generation(project_dir, "storyboard", ["S01_SH01"], estimated_cost=0.1)
+
+    stage = generate_video(
+        project_dir=project_dir, shot_path=shot_path, provider=MockVideoProvider(),
+        prompt="x", model="veo-3", reference_paths=[],
+        duration_seconds=2.0, output_path=project_dir / "05_video" / "S01_SH01.mp4",
+        provider_name="mock",
+    )
+    assert "requested_format" not in stage["artifact"]
