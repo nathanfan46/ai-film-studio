@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
 from ai_film.models import (
     Capability, GenerationJob, JobStatus, VideoGenerationRequest, VideoGenerationResult,
 )
@@ -68,6 +73,78 @@ MODELS_WITH_AUTO_AUDIO = {"veo-3"}
 # a caller can always pass one without needing to know per-model support.
 MODELS_WITH_END_IMAGE_URL = {"h3-max"}
 
+# Verified against fal's real OpenAPI schemas — see the design spec's
+# provider capability table. veo-3 has both resolution (720p/1080p) and
+# aspect_ratio (auto/16:9/9:16) fields; h3-max has only resolution
+# (480P/768P), its aspect ratio "follows image_url" per its own docs;
+# hailuo has neither field at all.
+_VEO3_RESOLUTION_TIERS = {720: "720p", 1080: "1080p"}
+_VEO3_ASPECT_RATIOS = {"16:9", "9:16"}
+_H3_MAX_RESOLUTION_TIERS = {480: "480P", 768: "768P"}
+
+# Models whose output aspect ratio is controlled entirely by the input
+# reference image, not a request field — the target aspect ratio can only
+# reach the provider by resizing the reference image itself before
+# upload. veo-3 is excluded: its own aspect_ratio field already covers it.
+MODELS_REQUIRING_RESIZED_REFERENCE = {"h3-max", "hailuo-2.3", "hailuo-2.3-fast"}
+
+
+def _nearest_aspect_ratio_enum(width: int, height: int, allowed: set[str]) -> str:
+    """Reduce width:height to a ratio and pick the closest allowed enum
+    value by numeric ratio distance — same snap-to-nearest idea
+    _snap_duration already uses for clip length."""
+    target_ratio = width / height
+
+    def _ratio_value(enum: str) -> float:
+        w_str, h_str = enum.split(":")
+        return int(w_str) / int(h_str)
+
+    return min(allowed, key=lambda enum: abs(_ratio_value(enum) - target_ratio))
+
+
+def _video_format_fields(model: str, width: int, height: int) -> dict:
+    """Native resolution/aspect_ratio fields for a model's request body,
+    derived from the canonical target. Empty dict for models with no such
+    fields at all (the hailuo family), which rely entirely on
+    _resize_reference_for_target instead."""
+    if model == "veo-3":
+        tier = min(_VEO3_RESOLUTION_TIERS, key=lambda t: abs(t - height))
+        return {
+            "resolution": _VEO3_RESOLUTION_TIERS[tier],
+            "aspect_ratio": _nearest_aspect_ratio_enum(width, height, _VEO3_ASPECT_RATIOS),
+        }
+    if model == "h3-max":
+        tier = min(_H3_MAX_RESOLUTION_TIERS, key=lambda t: abs(t - height))
+        return {"resolution": _H3_MAX_RESOLUTION_TIERS[tier]}
+    return {}
+
+
+def _resize_reference_for_target(image_path: Path, width: int, height: int) -> Path:
+    """Resize/pad image_path to exactly width x height via the same
+    scale+pad technique render.py uses for clip normalization, writing a
+    throwaway temp file. For h3-max/hailuo, whose output aspect ratio
+    follows the reference image, this is how the target aspect ratio
+    actually reaches the provider — the exact pixel size is incidental
+    (the simplest way to produce a well-formed image carrying the right
+    ratio), not a promise the provider is expected to reproduce. See the
+    design spec's Section 3 note."""
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("ffmpeg is not installed or not on PATH")
+    tmp_dir = Path(tempfile.mkdtemp(prefix="ai-film-refsize-"))
+    output_path = tmp_dir / f"resized_{image_path.name}"
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", str(image_path),
+            "-vf", (
+                f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+            ),
+            str(output_path),
+        ],
+        check=True, capture_output=True,
+    )
+    return output_path
+
 # Some models (observed on a hailuo-2.3 base video, S01_SH03) burn a
 # subtitle-style on-screen caption of the spoken line into the frame, with
 # timing that doesn't reliably match the actual voice track once combined
@@ -114,11 +191,23 @@ class FalVideoProvider:
             input_data["prompt_expansion_mode"] = "balanced"
         if request.model in MODELS_WITH_AUTO_AUDIO:
             input_data["generate_audio"] = False
+        has_target = bool(request.target_width and request.target_height)
+        if has_target:
+            input_data.update(
+                _video_format_fields(request.model, request.target_width, request.target_height)
+            )
         if request.reference_paths:
             app_id = MODEL_TO_IMAGE_TO_VIDEO_APP_ID.get(
                 request.model, MODEL_TO_APP_ID[request.model]
             )
-            input_data["image_url"] = client.upload_file(request.reference_paths[0])
+            reference_path = request.reference_paths[0]
+            if has_target and request.model in MODELS_REQUIRING_RESIZED_REFERENCE:
+                reference_path = str(
+                    _resize_reference_for_target(
+                        Path(reference_path), request.target_width, request.target_height
+                    )
+                )
+            input_data["image_url"] = client.upload_file(reference_path)
             if request.end_reference_path and request.model in MODELS_WITH_END_IMAGE_URL:
                 input_data["end_image_url"] = client.upload_file(request.end_reference_path)
         else:

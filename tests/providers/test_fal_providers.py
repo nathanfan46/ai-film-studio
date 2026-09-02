@@ -20,7 +20,10 @@ from ai_film.providers.fal.audio import FalAudioProvider, _speaker_id
 from ai_film.providers.fal.catalog import FalProviderCatalog
 from ai_film.providers.fal.image import FalImageProvider
 from ai_film.providers.fal.lipsync import FalLipsyncProvider
-from ai_film.providers.fal.video import FalVideoProvider
+from ai_film.providers.fal.video import (
+    MODELS_REQUIRING_RESIZED_REFERENCE, _nearest_aspect_ratio_enum, _resize_reference_for_target,
+    _video_format_fields, FalVideoProvider,
+)
 
 
 def test_catalog_lists_image_models_only_for_image_capability():
@@ -792,6 +795,116 @@ def test_fal_music_provider_sends_prompt_and_integer_duration(mock_requests, tmp
 
     sent_input = mock_requests.post.call_args.kwargs["json"]
     assert sent_input == {"prompt": "tense strings", "duration": 45}
+
+
+def test_nearest_aspect_ratio_enum_picks_closest_by_ratio_distance():
+    assert _nearest_aspect_ratio_enum(1280, 720, {"16:9", "9:16"}) == "16:9"
+    assert _nearest_aspect_ratio_enum(720, 1280, {"16:9", "9:16"}) == "9:16"
+
+
+def test_video_format_fields_for_veo3_sends_resolution_and_aspect_ratio():
+    fields = _video_format_fields("veo-3", 1280, 720)
+    assert fields == {"resolution": "720p", "aspect_ratio": "16:9"}
+
+
+def test_video_format_fields_for_veo3_picks_1080p_tier():
+    fields = _video_format_fields("veo-3", 1920, 1080)
+    assert fields["resolution"] == "1080p"
+
+
+def test_video_format_fields_for_h3_max_sends_resolution_only():
+    fields = _video_format_fields("h3-max", 1280, 720)
+    assert fields == {"resolution": "768P"}
+
+
+def test_video_format_fields_for_hailuo_is_empty_no_native_fields_exist():
+    assert _video_format_fields("hailuo-2.3", 1280, 720) == {}
+    assert _video_format_fields("hailuo-2.3-fast", 1280, 720) == {}
+
+
+def test_models_requiring_resized_reference_is_h3_max_and_both_hailuo_models():
+    assert MODELS_REQUIRING_RESIZED_REFERENCE == {"h3-max", "hailuo-2.3", "hailuo-2.3-fast"}
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_resize_reference_for_target_produces_exact_target_dimensions(tmp_path: Path):
+    source = tmp_path / "source.png"
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=blue:s=500x500:d=1", "-frames:v", "1", str(source)],
+        check=True, capture_output=True,
+    )
+
+    output = _resize_reference_for_target(source, 1280, 720)
+
+    probe = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", str(output),
+        ],
+        capture_output=True, text=True,
+    )
+    assert probe.stdout.strip() == "1280x720"
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_hailuo_uploads_resized_reference_when_target_is_set(mock_requests, tmp_path: Path, monkeypatch):
+    """hailuo has no aspect_ratio/resolution field at all (verified against
+    its OpenAPI schema) — the resized reference image is its only lever,
+    so submit() must upload the RESIZED file, not the raw one, whenever a
+    target was resolved."""
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    _mock_submit_response(mock_requests)
+    reference = tmp_path / "ref.png"
+    reference.write_bytes(b"REF-PNG")
+    uploaded_paths = []
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file",
+        lambda path: uploaded_paths.append(path) or "https://cdn.fal.run/uploaded.png",
+    )
+    monkeypatch.setattr(
+        "ai_film.providers.fal.video._resize_reference_for_target",
+        lambda image_path, width, height: Path(tmp_path / "resized.png"),
+    )
+
+    provider = FalVideoProvider()
+    provider.submit(
+        VideoGenerationRequest(
+            prompt="a girl walks", model="hailuo-2.3", reference_paths=[str(reference)],
+            duration_seconds=6, output_path=str(tmp_path / "out.mp4"),
+            target_width=1280, target_height=720,
+        )
+    )
+
+    assert uploaded_paths == [str(tmp_path / "resized.png")]
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_veo3_uploads_raw_reference_never_resized(mock_requests, tmp_path: Path, monkeypatch):
+    """veo-3 has its own aspect_ratio field (verified against its OpenAPI
+    schema) — it must never go through the reference-resize path."""
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    _mock_submit_response(mock_requests)
+    reference = tmp_path / "ref.png"
+    reference.write_bytes(b"REF-PNG")
+    uploaded_paths = []
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file",
+        lambda path: uploaded_paths.append(path) or "https://cdn.fal.run/uploaded.png",
+    )
+
+    provider = FalVideoProvider()
+    provider.submit(
+        VideoGenerationRequest(
+            prompt="a girl walks", model="veo-3", reference_paths=[str(reference)],
+            duration_seconds=6, output_path=str(tmp_path / "out.mp4"),
+            target_width=1280, target_height=720,
+        )
+    )
+
+    assert uploaded_paths == [str(reference)]
+    sent_input = mock_requests.post.call_args.kwargs["json"]
+    assert sent_input["resolution"] == "720p"
+    assert sent_input["aspect_ratio"] == "16:9"
 
 
 @patch("ai_film.providers.fal.client.requests")
