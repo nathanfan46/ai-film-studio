@@ -1,3 +1,28 @@
+# Ignore everything at the repo root by default, then explicitly allow
+# back in only this project's actual source tree. This is deliberately
+# an allowlist, not a per-project-name list: `ai-film init`/`/create-film`
+# creates a new top-level directory named after whatever film title you
+# give it (e.g. `one-more-life/`, `hot-&-fierce-villain/`), and every one
+# of those is a full film project — shot data, reference images, and
+# possibly paid-for generated media — that must never be committed, no
+# matter what a user names their film. Adding a new top-level source
+# file/directory to this repo requires adding a matching `!/...` line
+# below, or it silently won't be tracked.
+/*
+
+!/.claude/
+!/docs/
+!/src/
+!/tests/
+!/.gitignore
+!/LICENSE
+!/pyproject.toml
+!/README.md
+!/README.zh-TW.md
+
+# Tooling/build artifacts that can appear nested inside the allowed
+# directories above (e.g. src/ai_film/__pycache__/) and must stay
+# ignored even though their parent directory is tracked.
 .superpowers/
 .claude/worktrees/
 __pycache__/
@@ -8,6 +33,5 @@ __pycache__/
 venv/
 build/
 dist/
-project/
-one-more-life/
 .env
+.DS_Store
