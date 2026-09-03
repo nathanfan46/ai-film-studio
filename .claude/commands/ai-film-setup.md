@@ -39,17 +39,24 @@ For each capability in this exact order — `image`, `video`, `voice`, `sfx`, `m
 2. Also mention `mock` is always available for that capability (for free, offline testing) even though it won't appear in the `ai-film models` catalog output (that command only lists real fal.ai models).
 3. Ask the user to pick a provider+model for this capability, or say "keep current" to leave it unchanged. Show the current pick from `PROJECT_PATH/config.json`'s `providers.<capability>` first so "keep current" is a real option.
 
-## Step 3: Write the picks
+## Step 3: Production format
 
-Read `PROJECT_PATH/config.json`. For each capability the user changed, update `providers.<capability>.provider` and `providers.<capability>.model` in place — leave `providers.<capability>.parameters` untouched (an empty object `{}` by default; only touch it if the user explicitly asks to set provider parameters). Write the file back with 2-space indent and a trailing newline, matching the file `ai-film init` originally wrote — do not reorder existing top-level keys.
+Show the user the current values from `PROJECT_PATH/config.json`'s `render` section (`resolution`, `fps`) — `1280x720`/`24` (landscape) unless something already changed them. Ask whether this film should be landscape (16:9, `1280x720` — the default), vertical/portrait (9:16, e.g. for Reels/Shorts/TikTok-style delivery — `720x1280`), or square (1:1 — `1080x1080`), or "keep current." This is a whole-film decision almost always, not a per-shot one — every shot inherits `render.resolution`/`render.fps` as its default format unless a shot explicitly overrides it later.
+
+This step exists because the format decision otherwise has nowhere reliable to land: if the user only mentions it in passing during the Director agent's story brainstorm (`/create-film`), it's easy for that preference to never get written anywhere, and every shot silently defaults to landscape — wasting a paid generation before anyone notices the mismatch. Asking here, once, up front, closes that gap regardless of whether the Director conversation also asks about it.
+
+## Step 4: Write the picks
+
+Read `PROJECT_PATH/config.json`. For each capability the user changed, update `providers.<capability>.provider` and `providers.<capability>.model` in place — leave `providers.<capability>.parameters` untouched (an empty object `{}` by default; only touch it if the user explicitly asks to set provider parameters). If the user picked a production format in Step 3 that differs from the current values, also update `render.resolution` (and `render.fps`, only if they asked for something other than `24`) under the top-level `render` key. Write the file back with 2-space indent and a trailing newline, matching the file `ai-film init` originally wrote — do not reorder existing top-level keys.
 
 Confirm back to the user what changed, e.g.:
 
 ```
 providers.image: fal/nano-banana -> fal/nano-banana-pro
 providers.video: unchanged (fal/veo-3)
+render.resolution: 1280x720 -> 720x1280 (portrait)
 ```
 
-## Step 4: Re-affirm the cost gate
+## Step 5: Re-affirm the cost gate
 
 Tell the user, briefly: nothing generates automatically just because a provider is configured here — every `generate-*`/`generate-candidates`/`edit-candidate` call still requires `ai-film approve-generation` first (the `/create-film` agents handle that for you, showing a cost estimate before asking).

@@ -51,8 +51,13 @@ Do not write any file yet. Converge on, across as many `NEEDS_INPUT`/`HUMAN_RESP
 - The location(s) the story's scenes take place in — named consistently, since these become locked, reusable environments (see Step 4); the same place mentioned in two different scenes must use the exact same name
 - A style reference (visual/tonal touchstone — a film, art style, or mood)
 - The core conflict or arc
+- **Production format** — what shape is the final video? (`id: brainstorm_format`). Default to landscape 16:9 (`1280x720`) if the user doesn't have an opinion; if they mention vertical/portrait/Reels/Shorts/TikTok-style, that's `720x1280` (9:16); square is `1080x1080` (1:1). This is a whole-film decision almost always, not a per-shot one.
 
-Ask one question at a time — each is its own `NEEDS_INPUT` with `type: clarification` and its own `id` (e.g. `id: brainstorm_genre`, then `id: brainstorm_characters`, and so on), ending your turn every time. Once you and the user have converged (across those round trips) on a logline and a short narrative arc, write `00_story/story.md`:
+Ask one question at a time — each is its own `NEEDS_INPUT` with `type: clarification` and its own `id` (e.g. `id: brainstorm_genre`, then `id: brainstorm_characters`, and so on), ending your turn every time.
+
+**Write the production format decision into `config.json` as soon as you have it — don't wait until `story.md` is written, and don't let it only live in this conversation.** This is the one bullet above whose answer doesn't go into `story.md` at all; skipping this step is exactly how a stated "make it vertical" preference silently evaporates and every shot defaults to landscape, wasting a paid generation before anyone notices. Read `PROJECT_PATH/config.json`, set `render.resolution` (and `render.fps` only if the user asked for something other than the default `24`) under the top-level `render` key, and write the file back with 2-space indent and a trailing newline, matching the file `ai-film init` originally wrote — do not reorder existing top-level keys (same convention `/ai-film-setup` already uses for `providers.*`). Every shot the Storyboard phase creates later inherits this as its default format automatically — you don't need to touch anything per-shot.
+
+Once you and the user have converged (across those round trips) on a logline and a short narrative arc, write `00_story/story.md`:
 
 ```markdown
 # <Title>
