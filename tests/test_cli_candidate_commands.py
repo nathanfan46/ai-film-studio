@@ -54,6 +54,25 @@ def test_generate_candidates_succeeds_after_approval(tmp_path: Path):
         assert (project_dir / "assets" / "characters" / "girl" / "candidates" / f"{i:03d}.png").exists()
 
 
+def test_generate_candidates_rebuilds_review_gallery(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    _approve_bibles(project_dir)
+
+    result = runner.invoke(
+        app,
+        ["generate-candidates", "--target", "character:girl", "--count", "4",
+         "--prompt", "a girl, sci-fi style", "--path", str(project_dir)],
+    )
+
+    assert result.exit_code == 0, result.output
+    gallery_path = project_dir / "assets" / "characters" / "girl" / "candidates" / "review.html"
+    assert gallery_path.exists()
+    assert str(gallery_path) in result.output
+    html = gallery_path.read_text()
+    for i in range(1, 5):
+        assert f"{i:03d}.png" in html
+
+
 def test_generate_candidates_requires_prompt_for_character_target(tmp_path: Path):
     project_dir = _init_mock_project(tmp_path)
     _approve_bibles(project_dir)
@@ -226,3 +245,27 @@ def test_edit_candidate_adds_a_new_candidate(tmp_path: Path):
 
     assert result.exit_code == 0, result.output
     assert (project_dir / "assets" / "characters" / "girl" / "candidates" / "002.png").exists()
+
+
+def test_edit_candidate_rebuilds_review_gallery_with_the_new_candidate(tmp_path: Path):
+    """The gap this closes: a freshly edited candidate (e.g. 002.png) must
+    show up in review.html immediately, not just after someone remembers to
+    run `ai-film review` by hand."""
+    project_dir = _init_mock_project(tmp_path)
+    _approve_bibles(project_dir)
+    runner.invoke(
+        app,
+        ["generate-candidates", "--target", "character:girl", "--count", "1",
+         "--prompt", "a girl", "--path", str(project_dir)],
+    )
+
+    result = runner.invoke(
+        app,
+        ["edit-candidate", "--target", "character:girl", "--id", "001",
+         "--instruction", "black jacket instead of white", "--path", str(project_dir)],
+    )
+
+    assert result.exit_code == 0, result.output
+    gallery_path = project_dir / "assets" / "characters" / "girl" / "candidates" / "review.html"
+    assert str(gallery_path) in result.output
+    assert "002.png" in gallery_path.read_text()

@@ -1025,6 +1025,24 @@ def generate_candidates_cmd(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
     typer.echo(f"{target}: generated {len(result['added'])} candidate(s): {', '.join(result['added'])}")
+    _rebuild_gallery(path, target)
+
+
+def _rebuild_gallery(path: Path, target: str) -> None:
+    """Keep review.html current with whatever candidates are actually on
+    disk after generate-candidates/edit-candidate add one — without this,
+    the gallery a human has open silently falls behind (a freshly edited
+    candidate doesn't show up until someone remembers to run `ai-film
+    review` by hand). Best-effort and non-fatal: a gallery-rebuild failure
+    must never turn an otherwise-successful generate/edit into a reported
+    failure, since the real work (the new candidate file, the shot.json
+    entry) already succeeded and persisted before this runs."""
+    try:
+        html_path = build_gallery(path, target)
+    except ValueError as exc:
+        typer.echo(f"{target}: could not rebuild review gallery: {exc}", err=True)
+        return
+    typer.echo(f"{target}: review {html_path}")
 
 
 @app.command(name="review")
@@ -1088,6 +1106,7 @@ def edit_candidate_cmd(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
     typer.echo(f"{target}: added candidate {entry['id']} (edit of {entry['parent']})")
+    _rebuild_gallery(path, target)
 
 
 if __name__ == "__main__":
