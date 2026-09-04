@@ -9,6 +9,7 @@ from ai_film.models import (
     ImageGenerationRequest,
     JobStatus,
     LipsyncGenerationRequest,
+    MotionTransferRequest,
     MusicGenerationRequest,
     SfxGenerationRequest,
     VoiceGenerationRequest,
@@ -142,3 +143,36 @@ def test_mock_image_provider_submit_edit_completes_when_supported(tmp_path: Path
     assert provider.poll(job) == JobStatus.COMPLETED
     result = provider.get_result(job)
     assert Path(result.artifact_path).exists()
+
+
+def test_mock_motion_transfer_provider_completes_and_writes_artifact(tmp_path: Path):
+    from ai_film.providers.mock.motion_transfer import MockMotionTransferProvider
+
+    provider = MockMotionTransferProvider()
+    output_path = tmp_path / "shot.mp4"
+    request = MotionTransferRequest(
+        image_path=str(tmp_path / "ref.png"), driving_video_path=str(tmp_path / "dance.mp4"),
+        model="kling-motion-control", output_path=str(output_path),
+    )
+    job = provider.submit(request)
+    assert job.capability == Capability.MOTION_TRANSFER
+    assert provider.poll(job) == JobStatus.COMPLETED
+    result = provider.get_result(job)
+    assert result.artifact_path == str(output_path)
+    assert output_path.exists()
+    assert result.size_bytes > 0
+    assert result.duration_seconds > 0
+
+
+def test_mock_motion_transfer_provider_simulates_submit_failures(tmp_path: Path):
+    from ai_film.providers.mock.motion_transfer import MockMotionTransferProvider
+
+    provider = MockMotionTransferProvider(fail_first_n_submits=1)
+    request = MotionTransferRequest(
+        image_path=str(tmp_path / "ref.png"), driving_video_path=str(tmp_path / "dance.mp4"),
+        model="kling-motion-control", output_path=str(tmp_path / "shot.mp4"),
+    )
+    with pytest.raises(ProviderError):
+        provider.submit(request)
+    job = provider.submit(request)
+    assert provider.poll(job) == JobStatus.COMPLETED
