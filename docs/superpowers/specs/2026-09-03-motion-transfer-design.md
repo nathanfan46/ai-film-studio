@@ -285,6 +285,56 @@ audio-mux design was built to avoid.
   defaults).
 - Full suite must stay green throughout (400 passing as of this spec).
 
+## Shot-to-shot continuity: no new mechanism needed
+
+A natural follow-on question during design was how a shot ending on a
+specific motion-transferred gesture (e.g. "turn around, walk toward
+screen-right, exit frame") should hand off to the next shot. This does
+**not** need a new capability or a new shot.json continuity field —
+this project already has two mechanisms that compose to cover it:
+
+- **`scene_continuity.py`**'s spatial canon (`screen_side`/`facing` per
+  character, `transitions` recording when that state changes) already
+  provides semantic, provider-agnostic shot-to-shot continuity.
+- **`generate-video --continue-from-previous`** already provides
+  pixel-level continuity: it starts the next shot from the *actual last
+  frame* of the previous shot's real generated video, not a description
+  of what that frame should contain.
+
+If a shot's script calls for a specific exit motion, that motion is
+itself just another `MOTION_TRANSFER` driving-video clip (this capability
+isn't scoped to dance moves specifically — any reference motion works),
+composing as:
+
+```
+driving clip (the exit motion)
+       ↓
+MOTION_TRANSFER on shot A
+       ↓
+shot A's actual last frame
+       ↓
+generate-video --continue-from-previous on shot B
+       ↓
+shot B starts from shot A's real ending, not an abstract instruction
+```
+
+**Once `MOTION_TRANSFER` ships, validate this composition end-to-end
+before considering any further continuity work** — run a real
+`MOTION_TRANSFER` shot immediately followed by a
+`--continue-from-previous` shot, and check: (1) does the transferred
+motion actually reach its intended ending pose; (2) does that shot's last
+frame provide a usable starting state for the next one; (3) does the next
+shot preserve character identity/position/facing; (4) does the
+transition read as continuous with no manually-specified transition
+metadata at all. If all four hold, the existing architecture already
+handles this use case and no `MOTION_CONTINUE`/`MOTION_EDIT`/
+`transition_out`/`transition_in` work is warranted. A genuine mid-video
+continuation/inpainting capability (edit an existing clip's last N
+seconds in place) is a different, unverified premise — no model in this
+project's catalog has a confirmed schema for it; that stays unbuilt and
+undesigned until a real provider endpoint proves it exists, not designed
+speculatively ahead of one.
+
 ## Open risk, flagged not resolved
 
 Whether kling-motion-control's output actually follows the resized
