@@ -1440,3 +1440,131 @@ def test_generate_video_prints_warning_on_format_mismatch(tmp_path: Path, monkey
     assert "format mismatch" in result.output
     assert "1280x720" in result.output
     assert "1080x1080" in result.output
+
+
+def test_generate_motion_transfer_fails_without_driving_video(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    _approve(project_dir)
+
+    result = runner.invoke(
+        app, ["generate-motion-transfer", "--shot", "S01_SH01", "--path", str(project_dir)]
+    )
+
+    assert result.exit_code == 1
+    assert "driving_video" in result.output
+
+
+def test_generate_motion_transfer_fails_when_driving_video_file_missing(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["driving_video"] = {"path": "05_video/reference_clips/dance.mp4"}  # never created
+    shot["characters"] = [{"name": "girl", "reference": "assets/characters/girl/reference.png"}]
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _approve(project_dir)
+
+    result = runner.invoke(
+        app, ["generate-motion-transfer", "--shot", "S01_SH01", "--path", str(project_dir)]
+    )
+
+    assert result.exit_code == 1
+    assert "not found" in result.output
+
+
+def test_generate_motion_transfer_fails_without_character_reference(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["driving_video"] = {"path": "05_video/reference_clips/dance.mp4"}
+    driving_path = project_dir / "05_video" / "reference_clips" / "dance.mp4"
+    driving_path.parent.mkdir(parents=True, exist_ok=True)
+    driving_path.write_bytes(b"FAKE-MP4")
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _approve(project_dir)
+
+    result = runner.invoke(
+        app, ["generate-motion-transfer", "--shot", "S01_SH01", "--path", str(project_dir)]
+    )
+
+    assert result.exit_code == 1
+    assert "characters[0]" in result.output
+
+
+def test_generate_motion_transfer_succeeds_with_driving_video_and_reference(
+    tmp_path: Path, monkeypatch
+):
+    project_dir = _init_mock_project(tmp_path)
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["driving_video"] = {"path": "05_video/reference_clips/dance.mp4"}
+    driving_path = project_dir / "05_video" / "reference_clips" / "dance.mp4"
+    driving_path.parent.mkdir(parents=True, exist_ok=True)
+    driving_path.write_bytes(b"FAKE-MP4")
+    ref_path = project_dir / "assets" / "characters" / "girl" / "reference.png"
+    ref_path.parent.mkdir(parents=True, exist_ok=True)
+    ref_path.write_bytes(b"FAKE-PNG")
+    shot["characters"] = [{"name": "girl", "reference": "assets/characters/girl/reference.png"}]
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _approve(project_dir)
+
+    provider = _RecordingVideoProvider()  # already defined in this file; records whatever
+    # request object it's given, matching the pattern generate-video's own tests use
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(
+        app, ["generate-motion-transfer", "--shot", "S01_SH01", "--path", str(project_dir)]
+    )
+
+    assert result.exit_code == 0, result.output
+    request = provider.requests[-1]
+    assert request.image_path == str(ref_path)
+    assert request.driving_video_path == str(driving_path)
+    assert request.character_orientation == "video"
+
+
+def test_generate_motion_transfer_uses_config_default_when_config_predates_feature(
+    tmp_path: Path, monkeypatch
+):
+    """A config.json written before this feature shipped has no
+    providers.motion_transfer key at all — _stage_config's default=
+    fallback must produce the documented default instead of KeyError."""
+    project_dir = _init_mock_project(tmp_path)
+    config = json.loads((project_dir / "config.json").read_text())
+    del config["providers"]["motion_transfer"]
+    (project_dir / "config.json").write_text(json.dumps(config))
+    shot = load_shot(project_dir / "03_shots" / "S01_SH01.json")
+    shot["driving_video"] = {"path": "05_video/reference_clips/dance.mp4"}
+    driving_path = project_dir / "05_video" / "reference_clips" / "dance.mp4"
+    driving_path.parent.mkdir(parents=True, exist_ok=True)
+    driving_path.write_bytes(b"FAKE-MP4")
+    ref_path = project_dir / "assets" / "characters" / "girl" / "reference.png"
+    ref_path.parent.mkdir(parents=True, exist_ok=True)
+    ref_path.write_bytes(b"FAKE-PNG")
+    shot["characters"] = [{"name": "girl", "reference": "assets/characters/girl/reference.png"}]
+    save_shot(project_dir / "03_shots" / "S01_SH01.json", shot)
+    _approve(project_dir)
+    provider = _RecordingVideoProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+    # The documented default's provider is "fal", not "mock", so generation_service's
+    # provider_name != "mock" guard means format validation would run for real and
+    # try to ffprobe the fake bytes _RecordingVideoProvider "wrote" (it never
+    # actually wrote a real video file) — same workaround as
+    # test_generate_video_uses_locked_image_over_raw_references above.
+    monkeypatch.setattr(
+        "ai_film.services.generation_service._apply_video_format_validation",
+        lambda artifact, *a, **k: artifact,
+    )
+
+    result = runner.invoke(
+        app, ["generate-motion-transfer", "--shot", "S01_SH01", "--path", str(project_dir)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert provider.requests[-1].model == "kling-motion-control"
+
+
+def test_stage_config_still_raises_keyerror_for_unknown_stage_with_no_default(tmp_path: Path):
+    """Confirms the default= extension doesn't weaken _stage_config's
+    existing behavior for the 6 pre-existing stages."""
+    from ai_film.cli import _stage_config
+
+    project_dir = _init_mock_project(tmp_path)
+    with pytest.raises(KeyError):
+        _stage_config(project_dir, "not_a_real_stage")

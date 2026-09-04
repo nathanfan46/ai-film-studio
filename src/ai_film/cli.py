@@ -30,6 +30,7 @@ from ai_film.services.candidate_service import (
 from ai_film.services.generation_service import (
     generate_image as generate_image_service,
     generate_lipsync as generate_lipsync_service,
+    generate_motion_transfer as generate_motion_transfer_service,
     generate_music as generate_music_service,
     generate_sfx as generate_sfx_service,
     generate_video as generate_video_service,
@@ -134,13 +135,20 @@ def validate_cmd(path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path")) -> N
         raise typer.Exit(code=1)
 
 
-def _stage_config(path: Path, stage: str) -> dict:
+def _stage_config(path: Path, stage: str, default: dict | None = None) -> dict:
     config = json.loads((path / "config.json").read_text())
-    return config["providers"][stage], config["generation"]
+    stage_config = config["providers"].get(stage, default)
+    if stage_config is None:
+        raise KeyError(stage)
+    return stage_config, config["generation"]
 
 
 _DEFAULT_TARGET_RESOLUTION = (1280, 720)
 _DEFAULT_TARGET_FPS = 24
+
+_MOTION_TRANSFER_DEFAULT_CONFIG = {
+    "provider": "fal", "model": "kling-motion-control", "parameters": {},
+}
 
 
 def _parse_resolution(resolution: str) -> tuple[int, int]:
@@ -515,6 +523,61 @@ def generate_lipsync_cmd(
         )
 
     _run_generation(shot, "lipsync", _run)
+
+
+@app.command(name="generate-motion-transfer")
+def generate_motion_transfer_cmd(
+    shot: str = typer.Option(..., "--shot"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Generate a shot's video by retargeting a driving reference video's
+    motion onto the shot's first character's locked reference image,
+    instead of prompt-driven text-to-video. Reads both inputs from the
+    shot's own fields (driving_video.path, characters[0].reference) — no
+    CLI flags for either, matching generate-lipsync's pattern of reading
+    already-set shot fields. Writes into the same generation.video slot
+    generate-video uses; idempotent by default, --force to regenerate."""
+    stage_config, gen_config = _stage_config(
+        path, "motion_transfer", default=_MOTION_TRANSFER_DEFAULT_CONFIG,
+    )
+    shot_path = path / "03_shots" / f"{shot}.json"
+    shot_data = load_shot(shot_path)
+
+    driving_video = (shot_data.get("driving_video") or {}).get("path")
+    if not driving_video:
+        typer.echo(f"{shot}: no driving_video.path set in shot.json", err=True)
+        raise typer.Exit(code=1)
+    driving_video_path = path / driving_video
+    if not driving_video_path.exists():
+        typer.echo(f"{shot}: driving video not found at {driving_video_path}", err=True)
+        raise typer.Exit(code=1)
+
+    characters = shot_data.get("characters", [])
+    if not characters or not characters[0].get("reference"):
+        typer.echo(
+            f"{shot}: motion-transfer requires characters[0] to have a locked reference image",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    image_path = path / characters[0]["reference"]
+
+    target_width, target_height, target_fps = _resolve_target_format(path, shot_data)
+    strict_format = _strict_format(path)
+
+    def _run():
+        provider = resolve_provider(Capability.MOTION_TRANSFER, stage_config["provider"])
+        return generate_motion_transfer_service(
+            project_dir=path, shot_path=shot_path, provider=provider,
+            image_path=str(image_path), driving_video_path=str(driving_video_path),
+            model=stage_config["model"], output_path=path / "05_video" / f"{shot}.mp4",
+            provider_name=stage_config["provider"], max_attempts=gen_config["max_attempts"],
+            poll_interval_seconds=gen_config["poll_interval_seconds"], force=force,
+            target_width=target_width, target_height=target_height, target_fps=target_fps,
+            strict_format=strict_format,
+        )
+
+    _run_generation(shot, "motion-transfer", _run)
 
 
 @app.command(name="generate-voice")
