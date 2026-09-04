@@ -11,6 +11,7 @@ from ai_film.models import (
     ImageGenerationRequest,
     JobStatus,
     LipsyncGenerationRequest,
+    MotionTransferRequest,
     MusicGenerationRequest,
     SfxGenerationRequest,
     VideoGenerationRequest,
@@ -20,6 +21,7 @@ from ai_film.providers.fal.audio import FalAudioProvider, _speaker_id
 from ai_film.providers.fal.catalog import FalProviderCatalog
 from ai_film.providers.fal.image import FalImageProvider, _image_format_fields
 from ai_film.providers.fal.lipsync import FalLipsyncProvider
+from ai_film.providers.fal.motion_transfer import FalMotionTransferProvider, MODEL_TO_APP_ID
 from ai_film.providers.fal.video import (
     MODELS_REQUIRING_RESIZED_REFERENCE, _nearest_aspect_ratio_enum, _resize_reference_for_target,
     _video_format_fields, FalVideoProvider,
@@ -985,3 +987,127 @@ def test_image_provider_sends_format_fields_on_edit_call(mock_requests, tmp_path
     sent_input = mock_requests.post.call_args.kwargs["json"]
     assert sent_input["aspect_ratio"] == "16:9"
     assert sent_input["resolution"] == "1K"
+
+
+def test_motion_transfer_model_to_app_id_is_kling_motion_control():
+    assert MODEL_TO_APP_ID == {
+        "kling-motion-control": "fal-ai/kling-video/v2.6/standard/motion-control",
+    }
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_motion_transfer_provider_sends_expected_request_body(
+    mock_requests, tmp_path: Path, monkeypatch
+):
+    """Verified against fal's real OpenAPI schema for
+    fal-ai/kling-video/v2.6/standard/motion-control: image_url, video_url,
+    character_orientation, and keep_original_sound are the fields that
+    matter here. keep_original_sound must always be False — never a
+    request-object value — per this project's own audio-ownership design
+    (dialogue/sfx/music are attached later, deliberately, via
+    generate-lipsync/mux-audio)."""
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    _mock_submit_response(mock_requests)
+    image = tmp_path / "ref.png"
+    image.write_bytes(b"REF-PNG")
+    driving_video = tmp_path / "dance.mp4"
+    driving_video.write_bytes(b"DRIVING-MP4")
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file",
+        lambda path: f"https://cdn.fal.run/{Path(path).name}",
+    )
+
+    provider = FalMotionTransferProvider()
+    provider.submit(
+        MotionTransferRequest(
+            image_path=str(image), driving_video_path=str(driving_video),
+            model="kling-motion-control", output_path=str(tmp_path / "out.mp4"),
+        )
+    )
+
+    called_url = mock_requests.post.call_args.args[0]
+    assert called_url == "https://queue.fal.run/fal-ai/kling-video/v2.6/standard/motion-control"
+    sent_input = mock_requests.post.call_args.kwargs["json"]
+    assert sent_input["image_url"] == "https://cdn.fal.run/ref.png"
+    assert sent_input["video_url"] == "https://cdn.fal.run/dance.mp4"
+    assert sent_input["character_orientation"] == "video"
+    assert sent_input["keep_original_sound"] is False
+    assert "prompt" not in sent_input  # empty prompt is omitted, not sent as ""
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_motion_transfer_provider_sends_prompt_only_when_non_empty(
+    mock_requests, tmp_path: Path, monkeypatch
+):
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    _mock_submit_response(mock_requests)
+    image = tmp_path / "ref.png"
+    image.write_bytes(b"REF-PNG")
+    driving_video = tmp_path / "dance.mp4"
+    driving_video.write_bytes(b"DRIVING-MP4")
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file",
+        lambda path: f"https://cdn.fal.run/{Path(path).name}",
+    )
+
+    provider = FalMotionTransferProvider()
+    provider.submit(
+        MotionTransferRequest(
+            image_path=str(image), driving_video_path=str(driving_video),
+            model="kling-motion-control", output_path=str(tmp_path / "out.mp4"),
+            prompt="a woman dancing energetically",
+        )
+    )
+
+    sent_input = mock_requests.post.call_args.kwargs["json"]
+    assert sent_input["prompt"] == "a woman dancing energetically"
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_motion_transfer_provider_resizes_reference_image_when_target_set(
+    mock_requests, tmp_path: Path, monkeypatch
+):
+    """Reuses _resize_reference_for_target from providers/fal/video.py —
+    kling-motion-control has no resolution/aspect_ratio field, so the
+    reference image's own aspect ratio is the only lever available (same
+    situation this project already solved once for h3-max/hailuo)."""
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    _mock_submit_response(mock_requests)
+    image = tmp_path / "ref.png"
+    image.write_bytes(b"REF-PNG")
+    driving_video = tmp_path / "dance.mp4"
+    driving_video.write_bytes(b"DRIVING-MP4")
+    uploaded_paths = []
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file",
+        lambda path: uploaded_paths.append(path) or f"https://cdn.fal.run/{Path(path).name}",
+    )
+    monkeypatch.setattr(
+        "ai_film.providers.fal.motion_transfer._resize_reference_for_target",
+        lambda image_path, width, height: Path(tmp_path / "resized.png"),
+    )
+
+    provider = FalMotionTransferProvider()
+    provider.submit(
+        MotionTransferRequest(
+            image_path=str(image), driving_video_path=str(driving_video),
+            model="kling-motion-control", output_path=str(tmp_path / "out.mp4"),
+            target_width=1280, target_height=720,
+        )
+    )
+
+    assert str(tmp_path / "resized.png") in uploaded_paths
+    assert str(image) not in uploaded_paths
+    # the driving video is never resized — see the spec's non-goals
+    assert str(driving_video) in uploaded_paths
+
+
+@pytest.mark.skipif(shutil.which("ffprobe") is None, reason="ffprobe not installed")
+def test_motion_transfer_probe_duration_raises_provider_error_on_malformed_output(tmp_path: Path):
+    from ai_film.errors import ProviderError
+    from ai_film.providers.fal.motion_transfer import _probe_duration
+
+    garbage = tmp_path / "not-a-video.mp4"
+    garbage.write_bytes(b"not a real video")
+    with pytest.raises(ProviderError):
+        _probe_duration(garbage)
