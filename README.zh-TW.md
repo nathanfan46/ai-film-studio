@@ -201,6 +201,21 @@ ai-film models --capability video
 專案用到的任何 fal 模型都無法精確命中目標像素尺寸或影格率（已對照各模型自己的
 schema 驗證過）；真正強制套用精確最終尺寸的是 `render` 這一步。
 
+`generate-motion-transfer --shot <id> [--force]` 會把一段驅動參考影片的動作，重新
+套用到這個鏡頭已鎖定的角色參考圖上（`kling-video/v2.6/motion-control`），藉此生成
+鏡頭影片，而不是靠文字提示驅動的文字轉影片——適合用在文字描述無法穩定重現特定、
+精確、需要精準計數的編舞動作時（fal.ai 自家的文字轉影片模型常常會把重複的細微
+動作，塌縮成一種籠統、大概的近似效果）。這個指令會直接從鏡頭自己的 `shot.json`
+欄位讀取兩個輸入，不需要任何 CLI 參數：`driving_video.path`
+（`{"driving_video": {"path": "05_video/reference_clips/dance.mp4"}}`，跟其他所有
+參考路徑一樣是相對於專案的路徑）以及 `characters[0].reference`（這個鏡頭第一位
+角色鎖定的參考圖——motion-transfer 只支援單一驅動角色）。生成結果會寫進
+`generate-video` 使用的同一個 `generation.video` artifact 欄位，並沿用相同的
+idempotent／`--force` 語意——`render`、`generate-lipsync`、`mux-audio` 都會自動
+採用，不需要額外改動。生成出來的片段一律是無聲的（`keep_original_sound` 會被
+強制關閉）——之後請照一般方式，透過 `generate-lipsync`／`mux-audio` 補上對白、
+音效、音樂。
+
 **影片模型可以依鏡頭特徵個別設定**，透過 `config.json` 的
 `providers.video.model_by_feature`，這樣你就不用為了某些需要不同模型能力的鏡頭，
 反覆切換整個專案的預設模型：

@@ -201,6 +201,21 @@ either mode, since no fal model used by this project can hit an exact target pix
 or frame rate (verified against each model's own schema); `render` is what actually
 enforces the exact final size.
 
+`generate-motion-transfer --shot <id> [--force]` generates a shot's video by retargeting
+a driving reference video's motion onto the shot's locked character reference image
+(`kling-video/v2.6/motion-control`), instead of prompt-driven text-to-video — useful when
+a text description can't reliably reproduce a specific, precise, counted choreography
+(fal.ai's own text-to-video models tend to collapse repetitive micro-gestures into a
+generic approximation). Reads both inputs from the shot's own `shot.json` fields, no CLI
+flags: `driving_video.path` (`{"driving_video": {"path": "05_video/reference_clips/
+dance.mp4"}}`, project-relative like every other reference path) and `characters[0]
+.reference` (the shot's first character's locked reference image — motion-transfer is
+scoped to a single driving character). Writes into the same `generation.video` artifact
+slot `generate-video` uses, with the same idempotent/`--force` semantics — `render`,
+`generate-lipsync`, and `mux-audio` all pick it up automatically with no changes needed
+there. The generated clip is always silent (`keep_original_sound` is forced off) — attach
+dialogue/sfx/music afterward the normal way, via `generate-lipsync`/`mux-audio`.
+
 **Video model selection is configurable per shot feature**, via `config.json`'s
 `providers.video.model_by_feature`, so you don't have to flip the project-wide
 default model back and forth for shots that need a different model's capabilities:
