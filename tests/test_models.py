@@ -35,3 +35,20 @@ def test_image_generation_request_target_format_fields_default_to_zero():
     request = ImageGenerationRequest(prompt="x", model="nano-banana")
     assert request.target_width == 0
     assert request.target_height == 0
+
+
+def test_motion_transfer_request_defaults():
+    from ai_film.models import MotionTransferRequest
+
+    request = MotionTransferRequest(
+        image_path="ref.png", driving_video_path="dance.mp4", model="kling-motion-control",
+    )
+    assert request.character_orientation == "video"
+    assert request.prompt == ""
+    assert request.output_path == ""
+    assert request.target_width == 0
+    assert request.target_height == 0
+    assert request.target_fps == 0
+    # keep_original_sound is deliberately NOT a field on this dataclass —
+    # it's hardcoded at the provider layer (Task 3), never a request param.
+    assert not hasattr(request, "keep_original_sound")

@@ -74,6 +74,12 @@ SHOT_SCHEMA = {
                 "fps": {"type": "number"},
             },
         },
+        "driving_video": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+            },
+        },
     },
 }
 

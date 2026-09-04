@@ -101,3 +101,15 @@ def test_shot_schema_accepts_missing_format_field():
     shot = _valid_shot()
     assert "format" not in shot
     assert validate_shot(shot) == []
+
+
+def test_shot_schema_accepts_optional_driving_video_field():
+    shot = _valid_shot()
+    shot["driving_video"] = {"path": "05_video/reference_clips/dance.mp4"}
+    assert validate_shot(shot) == []
+
+
+def test_shot_schema_accepts_missing_driving_video_field():
+    shot = _valid_shot()
+    assert "driving_video" not in shot
+    assert validate_shot(shot) == []

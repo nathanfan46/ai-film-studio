@@ -36,6 +36,11 @@ _MODELS = [
         "fal", "kling-lipsync", Capability.LIPSYNC,
         "Kling Lipsync (audio-driven mouth sync on an existing video, $0.014/5s)",
     ),
+    ModelInfo(
+        "fal", "kling-motion-control", Capability.MOTION_TRANSFER,
+        "Kling v2.6 Motion Control (driving-video + reference-image -> character"
+        " performs that motion, $0.07/s)",
+    ),
 ]
 
 

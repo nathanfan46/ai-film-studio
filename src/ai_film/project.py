@@ -21,6 +21,7 @@ DEFAULT_CONFIG = {
         "sfx": {"provider": "fal", "model": "thinksound", "parameters": {}},
         "music": {"provider": "fal", "model": "cassetteai-music", "parameters": {}},
         "lipsync": {"provider": "fal", "model": "kling-lipsync", "parameters": {}},
+        "motion_transfer": {"provider": "fal", "model": "kling-motion-control", "parameters": {}},
     },
     "generation": {"max_attempts": 3, "max_parallel_jobs": 3, "poll_interval_seconds": 5},
     "render": {"resolution": "1280x720", "fps": 24, "strict_format": False},

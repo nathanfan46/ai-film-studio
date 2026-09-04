@@ -654,6 +654,15 @@ def test_catalog_lists_the_lipsync_model():
     assert "kling-lipsync" in model_names
 
 
+def test_catalog_lists_kling_motion_control_for_motion_transfer():
+    from ai_film.models import Capability
+    from ai_film.providers.fal.catalog import FalProviderCatalog
+
+    models = FalProviderCatalog().models(Capability.MOTION_TRANSFER)
+    assert [m.model for m in models] == ["kling-motion-control"]
+    assert models[0].provider == "fal"
+
+
 @patch("ai_film.providers.fal.client.requests")
 def test_video_result_records_the_snapped_duration_not_the_raw_request(
     mock_requests, tmp_path: Path, monkeypatch

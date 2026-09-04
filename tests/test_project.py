@@ -43,3 +43,11 @@ def test_default_config_includes_render_format_defaults(tmp_path: Path):
     project_dir = init_project(tmp_path / "project", "Test Film")
     config = json.loads((project_dir / "config.json").read_text())
     assert config["render"] == {"resolution": "1280x720", "fps": 24, "strict_format": False}
+
+
+def test_default_config_includes_motion_transfer_provider(tmp_path: Path):
+    project_dir = init_project(tmp_path / "project", "Test Film")
+    config = json.loads((project_dir / "config.json").read_text())
+    assert config["providers"]["motion_transfer"] == {
+        "provider": "fal", "model": "kling-motion-control", "parameters": {},
+    }

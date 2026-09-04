@@ -18,6 +18,7 @@ class Capability(str, Enum):
     SFX = "sfx"
     MUSIC = "music"
     LIPSYNC = "lipsync"
+    MOTION_TRANSFER = "motion_transfer"
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,19 @@ class LipsyncGenerationRequest:
     model: str
     duration_seconds: float
     output_path: str = ""
+
+
+@dataclass
+class MotionTransferRequest:
+    image_path: str
+    driving_video_path: str
+    model: str
+    character_orientation: str = "video"
+    prompt: str = ""
+    output_path: str = ""
+    target_width: int = 0
+    target_height: int = 0
+    target_fps: int = 0
 
 
 @dataclass
