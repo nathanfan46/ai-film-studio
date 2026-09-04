@@ -18,6 +18,7 @@ from ai_film.models import (
     ImageGenerationRequest,
     JobStatus,
     LipsyncGenerationRequest,
+    MotionTransferRequest,
     MusicGenerationRequest,
     SfxGenerationRequest,
     VideoGenerationRequest,
@@ -541,6 +542,59 @@ def generate_lipsync(
         )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def generate_motion_transfer(
+    project_dir: Path,
+    shot_path: Path,
+    provider,
+    image_path: str,
+    driving_video_path: str,
+    model: str,
+    output_path: Path,
+    provider_name: str,
+    max_attempts: int = 3,
+    poll_interval_seconds: float = 0.0,
+    force: bool = False,
+    character_orientation: str = "video",
+    prompt: str = "",
+    target_width: int = 0,
+    target_height: int = 0,
+    target_fps: int = 0,
+    strict_format: bool = False,
+) -> dict:
+    """Generates a shot's video by retargeting a driving reference video's
+    motion onto a character reference image, writing into the same
+    generation.video slot generate_video uses — this is an alternative
+    primary video-generation method for a shot, not a post-processing
+    pass (unlike generate_lipsync, idempotency matches generate_video:
+    skip if already completed, force=True to regenerate)."""
+    request = MotionTransferRequest(
+        image_path=image_path, driving_video_path=driving_video_path, model=model,
+        character_orientation=character_orientation, prompt=prompt, output_path=str(output_path),
+        target_width=target_width, target_height=target_height, target_fps=target_fps,
+    )
+    validate = target_width and target_height and provider_name != "mock"
+
+    def _artifact(result):
+        artifact = _video_or_audio_artifact(result)
+        if validate:
+            artifact = _apply_video_format_validation(
+                artifact, Path(result.artifact_path), target_width, target_height,
+                target_fps, strict_format,
+            )
+        return artifact
+
+    return run_generation_stage(
+        project_dir=project_dir, shot_path=shot_path, stage="video",
+        scope=_SCOPE_BY_STAGE["video"],
+        submit_fn=lambda: provider.submit(request),
+        poll_fn=provider.poll, get_result_fn=provider.get_result,
+        result_to_artifact=_artifact,
+        provider_name=provider_name, model_name=model,
+        max_attempts=max_attempts, poll_interval_seconds=poll_interval_seconds,
+        force=force, superseded_reason="motion_transfer",
+    )
 
 
 def generate_voice(

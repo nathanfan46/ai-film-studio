@@ -11,6 +11,7 @@ from ai_film.models import (
     GenerationJob,
     ImageGenerationResult,
     JobStatus,
+    MotionTransferRequest,
     VideoGenerationResult,
 )
 from ai_film.providers.mock.image import MockImageProvider
@@ -18,6 +19,7 @@ from ai_film.services.generation_service import (
     _MIN_LIPSYNC_AUDIO_SECONDS,
     _pad_audio_if_too_short,
     generate_image,
+    generate_motion_transfer,
     generate_video,
 )
 from ai_film.shot_store import load_shot, save_shot
@@ -613,4 +615,111 @@ def test_generate_video_no_target_skips_validation_entirely(tmp_path: Path):
         duration_seconds=2.0, output_path=project_dir / "05_video" / "S01_SH01.mp4",
         provider_name="mock",
     )
+    assert "requested_format" not in stage["artifact"]
+
+
+class _RealFileMotionTransferProvider:
+    """Writes a real, ffprobe-readable video — mirrors _RealFileVideoProvider
+    from the format-validation tests earlier in this file, but records
+    MotionTransferRequest objects."""
+
+    def __init__(self, width: int = 1280, height: int = 720, fps: int = 24):
+        self.width, self.height, self.fps = width, height, fps
+        self._requests: dict[str, object] = {}
+        self._n = 0
+        self.submit_calls = 0
+
+    def submit(self, request):
+        self.submit_calls += 1
+        self._n += 1
+        job_id = f"real-motion-transfer-{self._n}"
+        self._requests[job_id] = request
+        return GenerationJob(provider="test", id=job_id, capability=Capability.MOTION_TRANSFER)
+
+    def poll(self, job):
+        return JobStatus.COMPLETED
+
+    def get_result(self, job):
+        request = self._requests[job.id]
+        output_path = Path(request.output_path)
+        _make_real_video(output_path, self.width, self.height, self.fps, duration=2.0)
+        return VideoGenerationResult(
+            artifact_path=str(output_path), size_bytes=output_path.stat().st_size,
+            duration_seconds=2.0,
+        )
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_generate_motion_transfer_writes_into_generation_video_stage(tmp_path: Path):
+    project_dir = _project(tmp_path)
+    shot_path = _shot_path(project_dir)
+    approve_generation(project_dir, "storyboard", ["S01_SH01"], estimated_cost=0.1)
+
+    stage = generate_motion_transfer(
+        project_dir=project_dir, shot_path=shot_path,
+        provider=_RealFileMotionTransferProvider(),
+        image_path=str(tmp_path / "ref.png"), driving_video_path=str(tmp_path / "dance.mp4"),
+        model="kling-motion-control", output_path=project_dir / "05_video" / "S01_SH01.mp4",
+        provider_name="fal",
+    )
+
+    assert stage["status"] == "completed"
+    shot = load_shot(shot_path)
+    assert shot["generation"]["video"]["status"] == "completed"
+    assert shot["generation"]["video"]["artifact"]["path"] == "05_video/S01_SH01.mp4"
+
+
+def test_generate_motion_transfer_is_idempotent_by_default(tmp_path: Path):
+    """Explicitly assert the provider is never called a second time — not
+    just that the output file is unchanged, which could pass even if the
+    provider were wastefully re-invoked and its result discarded."""
+    project_dir = _project(tmp_path)
+    shot_path = _shot_path(project_dir)
+    approve_generation(project_dir, "storyboard", ["S01_SH01"], estimated_cost=0.1)
+    provider = _RealFileMotionTransferProvider()
+    kwargs = dict(
+        project_dir=project_dir, shot_path=shot_path, provider=provider,
+        image_path=str(tmp_path / "ref.png"), driving_video_path=str(tmp_path / "dance.mp4"),
+        model="kling-motion-control", output_path=project_dir / "05_video" / "S01_SH01.mp4",
+        provider_name="fal",
+    )
+
+    generate_motion_transfer(**kwargs)
+    assert provider.submit_calls == 1
+    generate_motion_transfer(**kwargs)
+    assert provider.submit_calls == 1  # not called again
+
+
+def test_generate_motion_transfer_force_regenerates(tmp_path: Path):
+    project_dir = _project(tmp_path)
+    shot_path = _shot_path(project_dir)
+    approve_generation(project_dir, "storyboard", ["S01_SH01"], estimated_cost=0.1)
+    provider = _RealFileMotionTransferProvider()
+    kwargs = dict(
+        project_dir=project_dir, shot_path=shot_path, provider=provider,
+        image_path=str(tmp_path / "ref.png"), driving_video_path=str(tmp_path / "dance.mp4"),
+        model="kling-motion-control", output_path=project_dir / "05_video" / "S01_SH01.mp4",
+        provider_name="fal",
+    )
+
+    generate_motion_transfer(**kwargs)
+    assert provider.submit_calls == 1
+    generate_motion_transfer(force=True, **kwargs)
+    assert provider.submit_calls == 2
+
+
+def test_generate_motion_transfer_skips_format_validation_for_mock_provider(tmp_path: Path):
+    from ai_film.providers.mock.motion_transfer import MockMotionTransferProvider
+
+    project_dir = _project(tmp_path)
+    shot_path = _shot_path(project_dir)
+    approve_generation(project_dir, "storyboard", ["S01_SH01"], estimated_cost=0.1)
+
+    stage = generate_motion_transfer(
+        project_dir=project_dir, shot_path=shot_path, provider=MockMotionTransferProvider(),
+        image_path=str(tmp_path / "ref.png"), driving_video_path=str(tmp_path / "dance.mp4"),
+        model="kling-motion-control", output_path=project_dir / "05_video" / "S01_SH01.mp4",
+        provider_name="mock", target_width=1280, target_height=720,
+    )
+
     assert "requested_format" not in stage["artifact"]
