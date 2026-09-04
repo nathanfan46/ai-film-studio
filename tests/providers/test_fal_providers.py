@@ -1103,11 +1103,23 @@ def test_motion_transfer_provider_resizes_reference_image_when_target_set(
 
 
 @pytest.mark.skipif(shutil.which("ffprobe") is None, reason="ffprobe not installed")
-def test_motion_transfer_probe_duration_raises_provider_error_on_malformed_output(tmp_path: Path):
-    from ai_film.errors import ProviderError
+def test_motion_transfer_probe_duration_returns_zero_on_malformed_output(tmp_path: Path):
     from ai_film.providers.fal.motion_transfer import _probe_duration
 
     garbage = tmp_path / "not-a-video.mp4"
     garbage.write_bytes(b"not a real video")
-    with pytest.raises(ProviderError):
-        _probe_duration(garbage)
+    # A local, deterministic ffprobe failure must never raise ProviderError
+    # here: get_result() is called inside run_job's paid-retry loop, and
+    # raising would burn up to max_attempts paid re-submissions on a
+    # failure that retrying can never fix.
+    assert _probe_duration(garbage) == 0.0
+
+
+def test_motion_transfer_probe_duration_returns_zero_without_ffprobe(tmp_path: Path, monkeypatch):
+    from ai_film.providers.fal.motion_transfer import _probe_duration
+
+    monkeypatch.setattr(
+        "ai_film.providers.fal.motion_transfer.shutil.which", lambda name: None
+    )
+    video_path = tmp_path / "whatever.mp4"
+    assert _probe_duration(video_path) == 0.0

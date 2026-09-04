@@ -92,7 +92,9 @@ def init_cmd(title: str, path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path
 
 @app.command(name="models")
 def models_cmd(
-    capability: str = typer.Option(..., "--capability", help="image|video|voice|sfx|music"),
+    capability: str = typer.Option(
+        ..., "--capability", help="image|video|voice|sfx|music|lipsync|motion_transfer"
+    ),
 ) -> None:
     """List the provider/model catalog for a capability (v1: fal.ai only)."""
     try:

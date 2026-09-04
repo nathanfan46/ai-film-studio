@@ -4,7 +4,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from ai_film.errors import ProviderError
 from ai_film.models import (
     Capability, GenerationJob, JobStatus, MotionTransferRequest, VideoGenerationResult,
 )
@@ -22,13 +21,17 @@ def _probe_duration(video_path: Path) -> float:
     """Motion-transfer's endpoint has no duration request field at all —
     output length is entirely provider-determined (bounded by the driving
     video's own 3-30.05s constraint) — so the real artifact must be
-    probed, there's no static value to fall back to. Hardened the same
-    way render.py's/generation_service.py's own probe helpers already are
-    (raise ProviderError, not a bare subprocess/parse exception, so a
-    corrupt or unparseable artifact flows through run_generation_stage's
-    existing restore-and-mark-failed path instead of crashing uncaught)."""
+    probed, there's no static value to fall back to. Unlike render.py's/
+    generation_service.py's own probe helpers, this one is called from
+    get_result() *inside* run_job's paid-retry loop (see jobs.py), so a
+    local, deterministic ffprobe failure must never raise ProviderError
+    here — that would trigger up to max_attempts re-submissions of the
+    same paid generation for a failure retrying can never fix. Instead,
+    match audio.py's _probe_audio_duration: return 0.0 and let the
+    completed, paid artifact through with a falsy duration that downstream
+    callers already treat as "unknown, fall back to shot data"."""
     if shutil.which("ffprobe") is None:
-        raise ProviderError("ffprobe is not installed or not on PATH")
+        return 0.0
     probe = subprocess.run(
         [
             "ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -39,10 +42,8 @@ def _probe_duration(video_path: Path) -> float:
     raw = probe.stdout.strip()
     try:
         return float(raw)
-    except ValueError as exc:
-        raise ProviderError(
-            f"could not parse duration for {video_path}: ffprobe returned {raw!r}"
-        ) from exc
+    except ValueError:
+        return 0.0
 
 
 class FalMotionTransferProvider:

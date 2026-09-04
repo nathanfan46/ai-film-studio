@@ -1546,7 +1546,7 @@ def test_generate_motion_transfer_uses_config_default_when_config_predates_featu
     # provider_name != "mock" guard means format validation would run for real and
     # try to ffprobe the fake bytes _RecordingVideoProvider "wrote" (it never
     # actually wrote a real video file) — same workaround as
-    # test_generate_video_uses_locked_image_over_raw_references above.
+    # test_generate_video_prints_warning_on_format_mismatch above.
     monkeypatch.setattr(
         "ai_film.services.generation_service._apply_video_format_validation",
         lambda artifact, *a, **k: artifact,
