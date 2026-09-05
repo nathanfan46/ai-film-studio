@@ -45,3 +45,37 @@ def _probe_stream_info(video_path: Path) -> dict:
     num, den = stream["r_frame_rate"].split("/")
     fps = round(float(num) / float(den), 3) if float(den) else 0.0
     return {"resolution": f"{stream['width']}x{stream['height']}", "fps": fps}
+
+
+_SCENE_THRESHOLD = 0.35
+
+
+def _detect_scene_cuts(video_path: Path, threshold: float = _SCENE_THRESHOLD) -> list[float]:
+    """Scene-cut timestamps (seconds), NOT including 0.0. ffmpeg's
+    showinfo filter logs one line per frame selected by the scene
+    expression; each such line's pts_time is a cut boundary. Verified
+    empirically against a real synthetic 2-scene clip during spec
+    design — showinfo does log pts_time correctly for this filter."""
+    result = subprocess.run(
+        [
+            "ffmpeg", "-i", str(video_path),
+            "-vf", f"select='gt(scene,{threshold})',showinfo",
+            "-f", "null", "-",
+        ],
+        capture_output=True, text=True,
+    )
+    cuts = []
+    for line in result.stderr.splitlines():
+        if "pts_time:" not in line:
+            continue
+        cuts.append(float(line.split("pts_time:", 1)[1].split()[0]))
+    return sorted(set(cuts))
+
+
+def _scenes_from_cuts(cut_timestamps: list[float], total_duration: float) -> list[tuple[float, float]]:
+    boundaries = sorted(set(cut_timestamps) | {0.0, total_duration})
+    return [
+        (boundaries[i], boundaries[i + 1])
+        for i in range(len(boundaries) - 1)
+        if boundaries[i + 1] > boundaries[i]
+    ]
