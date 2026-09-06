@@ -216,6 +216,16 @@ slot `generate-video` uses, with the same idempotent/`--force` semantics — `re
 there. The generated clip is always silent (`keep_original_sound` is forced off) — attach
 dialogue/sfx/music afterward the normal way, via `generate-lipsync`/`mux-audio`.
 
+`analyze-reference-video --source <path> [--force]` analyzes a local reference video —
+scene cuts, keyframes, and a coarse per-scene "how much changed" signal — entirely via
+local ffmpeg, at zero fal.ai cost. Writes
+`assets/reference-video/video_analysis_brief.json`; the `/analyze-reference` command
+dispatches an agent that reads it, looks at the keyframes with its own vision to fill
+in each scene's description/subject/camera, flags scenes worth a `MOTION_TRANSFER`
+look, and gets your approval before the brief is used as grounding context by
+`/create-film`'s Director and Storyboard agents. Refuses to re-run over an approved
+brief — move or rename it first if you want to redo the analysis from scratch.
+
 **Video model selection is configurable per shot feature**, via `config.json`'s
 `providers.video.model_by_feature`, so you don't have to flip the project-wide
 default model back and forth for shots that need a different model's capabilities:

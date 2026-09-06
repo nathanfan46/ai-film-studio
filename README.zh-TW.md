@@ -216,6 +216,13 @@ idempotent／`--force` 語意——`render`、`generate-lipsync`、`mux-audio` �
 強制關閉）——之後請照一般方式，透過 `generate-lipsync`／`mux-audio` 補上對白、
 音效、音樂。
 
+`analyze-reference-video --source <path> [--force]`會分析本地端的參考影片——場景切點、關鍵影格，以及粗略的「這裡變化多少」訊號——完全透過本地 ffmpeg 運算，不花費任何 fal.ai 額度。會寫入
+`assets/reference-video/video_analysis_brief.json`；`/analyze-reference` 指令會派遣一個
+agent 讀取這份分析，用自己的視覺能力查看關鍵影格，填入每個場景的描述/主體/運鏡，標記出適合
+`MOTION_TRANSFER` 的場景，並在這份分析被 `/create-film` 的 Director 與 Storyboard agent
+當作參考依據使用之前，先取得你的核准。若分析結果已被核准，重新執行會被拒絕——想重新分析的話,
+請先移動或改名既有的檔案。
+
 **影片模型可以依鏡頭特徵個別設定**，透過 `config.json` 的
 `providers.video.model_by_feature`，這樣你就不用為了某些需要不同模型能力的鏡頭，
 反覆切換整個專案的預設模型：
