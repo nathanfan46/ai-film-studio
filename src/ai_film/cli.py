@@ -41,6 +41,7 @@ from ai_film.video_fix import trim_video as trim_video_service
 from ai_film.video_fix import mux_audio_track as mux_audio_track_service
 from ai_film.video_diagnostics import diagnose_video as diagnose_video_service
 from ai_film.video_diagnostics import extract_last_frame
+from ai_film.reference_analysis import analyze_reference_video as analyze_reference_video_service
 from ai_film.scene_continuity import (
     add_continuity_transition as add_continuity_transition_service,
     effective_spatial_state,
@@ -915,6 +916,25 @@ def diagnose_video_cmd(
             typer.echo(f"  silence: {window['start']:.2f}s - {window['end']:.2f}s")
     for frame in report["frames"]:
         typer.echo(f"  frame {frame['t']:.2f}s -> {frame['path']}")
+
+
+@app.command(name="analyze-reference-video")
+def analyze_reference_video_cmd(
+    source: Path = typer.Option(..., "--source"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Analyze a local reference video: scene cuts, a coarse per-scene
+    motion signal, and keyframes — local ffmpeg only, no fal cost. Writes
+    assets/reference-video/video_analysis_brief.json for
+    ai-film-reference-analyst to read and enrich."""
+    try:
+        brief = analyze_reference_video_service(path, source, force=force)
+    except (ValueError, RuntimeError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    brief_path = path / "assets" / "reference-video" / "video_analysis_brief.json"
+    typer.echo(f"analyzed {source.name}: {len(brief['scenes'])} scene(s) -> {brief_path}")
 
 
 @app.command(name="review-media")
