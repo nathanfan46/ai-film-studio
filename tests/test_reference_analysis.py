@@ -6,6 +6,7 @@ import pytest
 
 from ai_film.reference_analysis import (
     _detect_scene_cuts,
+    _extract_keyframe,
     _probe_duration,
     _probe_stream_info,
     _require_ffmpeg,
@@ -113,3 +114,15 @@ def test_visual_change_level_buckets():
     assert _visual_change_level(0.02) == "medium"
     assert _visual_change_level(0.08) == "medium"
     assert _visual_change_level(0.081) == "high"
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_extract_keyframe_writes_a_real_file(tmp_path: Path):
+    video_path = tmp_path / "clip.mp4"
+    _make_tiny_video(video_path, duration=2.0)
+    out_path = tmp_path / "keyframes" / "scene00_start.jpg"
+
+    _extract_keyframe(video_path, 0.1, out_path)
+
+    assert out_path.exists()
+    assert out_path.stat().st_size > 0
