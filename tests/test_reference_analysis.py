@@ -85,3 +85,31 @@ def test_scenes_from_cuts_handles_no_cuts():
 
 def test_scenes_from_cuts_deduplicates_cut_at_zero():
     assert _scenes_from_cuts([0.0], 4.0) == [(0.0, 4.0)]
+
+
+from ai_film.reference_analysis import _mean_interior_score, _scene_scores, _visual_change_level
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_scene_scores_spike_at_the_cut(tmp_path: Path):
+    video_path = tmp_path / "two_scene.mp4"
+    _make_two_scene_video(video_path, seg_duration=2.0)
+    scores = _scene_scores(video_path)
+    cut_scores = [score for t, score in scores if abs(t - 2.0) < 0.05]
+    assert cut_scores and cut_scores[0] > 0.4
+
+
+def test_mean_interior_score_excludes_boundaries():
+    scores = [(0.0, 0.9), (1.0, 0.01), (2.0, 0.9)]
+    assert _mean_interior_score(0.0, 2.0, scores) == pytest.approx(0.01)
+
+
+def test_mean_interior_score_returns_zero_when_no_interior_frames():
+    assert _mean_interior_score(0.0, 2.0, []) == 0.0
+
+
+def test_visual_change_level_buckets():
+    assert _visual_change_level(0.01) == "low"
+    assert _visual_change_level(0.02) == "medium"
+    assert _visual_change_level(0.08) == "medium"
+    assert _visual_change_level(0.081) == "high"
