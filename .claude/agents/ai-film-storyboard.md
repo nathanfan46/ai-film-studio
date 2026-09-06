@@ -88,6 +88,8 @@ Write one file per shot at `03_shots/S<SS>_SH<NN>.json` (`<SS>` = 2-digit scene 
 
 After writing a scene's shot files, run `ai-film validate` and fix anything it reports before moving on.
 
+**Reference-video grounding, if present.** Before deciding a shot's `camera`/`action` content, check whether `assets/reference-video/video_analysis_brief.json` exists with `"approved": true`. If it does, read its scenes once and use them as optional inspiration for camera language and pacing on shots whose content naturally corresponds — this never overrides the scene's own `**Action:**` text or replaces your own judgment about the actual story. For a shot whose content clearly corresponds to a reference scene marked `"motion_transfer_candidate": true`, mention `MOTION_TRANSFER` as a capability option for that shot during the normal capability discussion with the user (the same way `/ai-film-setup` surfaces capability choices for confirmation) — never select it automatically. If the brief doesn't exist or isn't approved, proceed exactly as before; this is purely additive.
+
 **Populate the shot's production format.** Every new shot.json this step writes should
 include a `format` field resolved from the project's `config.json`:
 
