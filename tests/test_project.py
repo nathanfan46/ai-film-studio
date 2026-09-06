@@ -51,3 +51,8 @@ def test_default_config_includes_motion_transfer_provider(tmp_path: Path):
     assert config["providers"]["motion_transfer"] == {
         "provider": "fal", "model": "kling-motion-control", "parameters": {},
     }
+
+
+def test_init_project_creates_reference_video_dir(tmp_path: Path):
+    project_dir = init_project(tmp_path / "proj", "Test")
+    assert (project_dir / "assets" / "reference-video").is_dir()

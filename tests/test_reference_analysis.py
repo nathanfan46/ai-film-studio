@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -126,3 +127,68 @@ def test_extract_keyframe_writes_a_real_file(tmp_path: Path):
 
     assert out_path.exists()
     assert out_path.stat().st_size > 0
+
+
+from ai_film.project import init_project
+from ai_film.reference_analysis import analyze_reference_video
+
+
+def test_analyze_reference_video_rejects_missing_source(tmp_path: Path):
+    project_dir = init_project(tmp_path / "proj", "Test")
+    with pytest.raises(ValueError):
+        analyze_reference_video(project_dir, tmp_path / "missing.mp4")
+
+
+def test_analyze_reference_video_refuses_when_approved(tmp_path: Path):
+    project_dir = init_project(tmp_path / "proj", "Test")
+    source = tmp_path / "ref.mp4"
+    source.write_bytes(b"FAKE-NOT-A-REAL-VIDEO")
+    ref_dir = project_dir / "assets" / "reference-video"
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    (ref_dir / "video_analysis_brief.json").write_text(json.dumps({"approved": True}))
+
+    with pytest.raises(RuntimeError, match="already approved"):
+        analyze_reference_video(project_dir, source, force=True)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_analyze_reference_video_writes_brief_and_keyframes(tmp_path: Path):
+    project_dir = init_project(tmp_path / "proj", "Test")
+    source = tmp_path / "ref.mp4"
+    _make_two_scene_video(source, seg_duration=2.0)
+
+    brief = analyze_reference_video(project_dir, source)
+
+    assert brief["approved"] is False
+    assert brief["schema_version"] == "1.0"
+    assert len(brief["scenes"]) == 2
+    for scene in brief["scenes"]:
+        assert scene["description"] is None
+        assert scene["motion_transfer_candidate"] is None
+        for kf_rel_path in scene["keyframes"]:
+            assert (project_dir / kf_rel_path).exists()
+
+    brief_path = project_dir / "assets" / "reference-video" / "video_analysis_brief.json"
+    assert json.loads(brief_path.read_text()) == brief
+    assert (project_dir / "assets" / "reference-video" / "source.mp4").exists()
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_analyze_reference_video_refuses_second_run_without_force(tmp_path: Path):
+    project_dir = init_project(tmp_path / "proj", "Test")
+    source = tmp_path / "ref.mp4"
+    _make_tiny_video(source, duration=1.0)
+    analyze_reference_video(project_dir, source)
+
+    with pytest.raises(RuntimeError, match="already exists"):
+        analyze_reference_video(project_dir, source)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_analyze_reference_video_force_overwrites_unapproved(tmp_path: Path):
+    project_dir = init_project(tmp_path / "proj", "Test")
+    source = tmp_path / "ref.mp4"
+    _make_tiny_video(source, duration=1.0)
+    analyze_reference_video(project_dir, source)
+
+    analyze_reference_video(project_dir, source, force=True)  # must not raise

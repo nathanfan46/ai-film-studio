@@ -5,7 +5,7 @@ from pathlib import Path
 
 PROJECT_DIRS = (
     "assets/characters", "assets/environments", "assets/props",
-    "assets/reference-images", "assets/fonts",
+    "assets/reference-images", "assets/fonts", "assets/reference-video",
     "00_story", "01_bibles", "02_scenes", "03_shots",
     "04_storyboard", "05_video",
     "06_audio/dialogue", "06_audio/sfx", "06_audio/music",

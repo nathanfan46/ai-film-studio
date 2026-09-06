@@ -138,3 +138,96 @@ def _extract_keyframe(video_path: Path, timestamp: float, output_path: Path) -> 
         ["ffmpeg", "-y", "-ss", str(timestamp), "-i", str(video_path), "-frames:v", "1", str(output_path)],
         check=True, capture_output=True,
     )
+
+
+_KEYFRAME_START_OFFSET = 0.1
+_KEYFRAME_MIDPOINT_MIN_DURATION = 3.0
+
+
+def _copy_source(source_path: Path, ref_dir: Path) -> Path:
+    ext = source_path.suffix or ".mp4"
+    dest_path = ref_dir / f"source{ext}"
+    shutil.copyfile(source_path, dest_path)
+    return dest_path
+
+
+def analyze_reference_video(project_dir: Path, source_path: Path, force: bool = False) -> dict:
+    """Copy source_path into assets/reference-video/, run scene detection
+    + motion-signal bucketing + keyframe extraction, write and return
+    video_analysis_brief.json's contents. Pure local ffmpeg — never
+    touches a fal.ai endpoint. See the design spec's "Ownership
+    invariant" for the approved/force refusal rules below."""
+    if not source_path.exists():
+        raise ValueError(f"source video not found: {source_path}")
+
+    ref_dir = project_dir / "assets" / "reference-video"
+    brief_path = ref_dir / "video_analysis_brief.json"
+    if brief_path.exists():
+        existing = json.loads(brief_path.read_text())
+        if existing.get("approved"):
+            raise RuntimeError(
+                f"{brief_path} is already approved — move or rename it "
+                "before re-running analysis"
+            )
+        if not force:
+            raise RuntimeError(f"{brief_path} already exists — pass --force to overwrite")
+
+    _require_ffmpeg()
+
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    keyframes_dir = ref_dir / "keyframes"
+    keyframes_dir.mkdir(parents=True, exist_ok=True)
+
+    dest_path = _copy_source(source_path, ref_dir)
+    duration = _probe_duration(dest_path)
+    stream_info = _probe_stream_info(dest_path)
+
+    cut_timestamps = _detect_scene_cuts(dest_path)
+    scene_bounds = _scenes_from_cuts(cut_timestamps, duration)
+    scores = _scene_scores(dest_path)
+
+    scenes = []
+    for index, (start, end) in enumerate(scene_bounds):
+        level = _visual_change_level(_mean_interior_score(start, end, scores))
+
+        keyframe_paths = []
+        start_kf = keyframes_dir / f"scene{index:02d}_start.jpg"
+        _extract_keyframe(dest_path, start + _KEYFRAME_START_OFFSET, start_kf)
+        keyframe_paths.append(project_relative_path(str(start_kf), project_dir))
+        if end - start > _KEYFRAME_MIDPOINT_MIN_DURATION:
+            mid_kf = keyframes_dir / f"scene{index:02d}_mid.jpg"
+            _extract_keyframe(dest_path, start + (end - start) / 2, mid_kf)
+            keyframe_paths.append(project_relative_path(str(mid_kf), project_dir))
+
+        scenes.append({
+            "scene_index": index,
+            "start_seconds": round(start, 2),
+            "end_seconds": round(end, 2),
+            "keyframes": keyframe_paths,
+            "visual_change_level": level,
+            "description": None,
+            "subject": None,
+            "subject_motion": None,
+            "camera": None,
+            "motion_transfer_candidate": None,
+        })
+
+    brief = {
+        "schema_version": "1.0",
+        "approved": False,
+        "source": {
+            "original_filename": source_path.name,
+            "path": project_relative_path(str(dest_path), project_dir),
+            "duration_seconds": round(duration, 2),
+            "resolution": stream_info["resolution"],
+            "fps": stream_info["fps"],
+        },
+        "scenes": scenes,
+        "analysis_meta": {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "scene_threshold": _SCENE_THRESHOLD,
+            "change_level_thresholds": {"low_max": _LOW_MAX, "medium_max": _MEDIUM_MAX},
+        },
+    }
+    brief_path.write_text(json.dumps(brief, indent=2, ensure_ascii=False))
+    return brief
