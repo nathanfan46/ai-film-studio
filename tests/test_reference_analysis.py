@@ -129,6 +129,16 @@ def test_extract_keyframe_writes_a_real_file(tmp_path: Path):
     assert out_path.stat().st_size > 0
 
 
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_extract_keyframe_raises_runtime_error_on_ffmpeg_failure(tmp_path: Path):
+    video_path = tmp_path / "not_really_a_video.mp4"
+    video_path.write_bytes(b"this is not a video file, just garbage bytes")
+    out_path = tmp_path / "keyframes" / "scene00_start.jpg"
+
+    with pytest.raises(RuntimeError):
+        _extract_keyframe(video_path, 0.1, out_path)
+
+
 from ai_film.project import init_project
 from ai_film.reference_analysis import analyze_reference_video
 

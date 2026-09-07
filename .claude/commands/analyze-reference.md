@@ -36,7 +36,7 @@ answer: <the user's answer>
 
 ## Step 0: Preflight — resolve a working `ai-film` binary
 
-Same resolution as `/create-film`'s Step 0: try `ai-film version` first; if that fails, try `./.venv/bin/ai-film version`; if neither works, offer to set up the venv. Call the resolved form `AI_FILM_BIN` and substitute it everywhere below and in the dispatched agent's own instructions.
+Same resolution as `/create-film`'s Step 0: try `ai-film version` first; if that fails, try `./.venv/bin/ai-film version`; if neither works, offer to set up the venv. Call the resolved form `AI_FILM_BIN` and substitute it everywhere below. You don't need to pass `AI_FILM_BIN` down when dispatching the `ai-film-reference-analyst` subagent in Step 1 — it resolves this exact same value independently.
 
 ## Parse arguments
 

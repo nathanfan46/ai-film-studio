@@ -345,17 +345,19 @@ explicitly ask for them on a shot. See
 `docs/superpowers/plans/2026-08-30-environment-locking.md` for the design and
 implementation history.
 
-**To use it:** the `/ai-film-setup` and `/create-film` commands and their five
-agents live in this repo's own `.claude/commands/` and `.claude/agents/` — Claude
-Code only discovers project-local commands/agents when you run `claude` from a
-directory whose `.claude/` contains them. Run `claude` from this repo checkout to
-use them (the film project itself doesn't have to live here — `/create-film "Title"
-[path]` takes the destination path as an argument, defaulting to `./<slugified-
-title>` inside wherever you ran `claude` from). To use these commands from a
-different working directory or a separate film-only repo, copy or symlink
-`.claude/commands/ai-film-setup.md`, `.claude/commands/create-film.md`, and the
-five files under `.claude/agents/` into that directory's own `.claude/` (or into
-`~/.claude/commands/` and `~/.claude/agents/` to make them available everywhere).
+**To use it:** the `/ai-film-setup`, `/create-film`, and `/analyze-reference`
+commands and their six agents live in this repo's own `.claude/commands/` and
+`.claude/agents/` — Claude Code only discovers project-local commands/agents
+when you run `claude` from a directory whose `.claude/` contains them. Run
+`claude` from this repo checkout to use them (the film project itself doesn't
+have to live here — `/create-film "Title" [path]` takes the destination path as
+an argument, defaulting to `./<slugified-title>` inside wherever you ran
+`claude` from). To use these commands from a different working directory or a
+separate film-only repo, copy or symlink `.claude/commands/ai-film-setup.md`,
+`.claude/commands/create-film.md`, `.claude/commands/analyze-reference.md`, and
+the six files under `.claude/agents/` into that directory's own `.claude/` (or
+into `~/.claude/commands/` and `~/.claude/agents/` to make them available
+everywhere).
 
 Per those specs' Future Extensions: a dedicated Continuity agent if shot volume ever
 justifies a second independent-context pass; a standalone entry point for revisiting

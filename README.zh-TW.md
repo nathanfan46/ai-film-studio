@@ -220,7 +220,7 @@ idempotent／`--force` 語意——`render`、`generate-lipsync`、`mux-audio` �
 `assets/reference-video/video_analysis_brief.json`；`/analyze-reference` 指令會派遣一個
 agent 讀取這份分析，用自己的視覺能力查看關鍵影格，填入每個場景的描述/主體/運鏡，標記出適合
 `MOTION_TRANSFER` 的場景，並在這份分析被 `/create-film` 的 Director 與 Storyboard agent
-當作參考依據使用之前，先取得你的核准。若分析結果已被核准，重新執行會被拒絕——想重新分析的話,
+當作參考依據使用之前，先取得你的核准。若分析結果已被核准，重新執行會被拒絕——想重新分析的話，
 請先移動或改名既有的檔案。
 
 **影片模型可以依鏡頭特徵個別設定**，透過 `config.json` 的
@@ -335,16 +335,17 @@ Environment agent 會針對 Director 所寫場景中出現的每個獨特地點�
 `docs/superpowers/plans/2026-08-30-environment-locking.md`，裡面有完整的設計與
 實作歷程。
 
-**使用方式：** `/ai-film-setup` 與 `/create-film` 這兩個指令，以及它們用到的五個
-agent，都放在這個 repo 自己的 `.claude/commands/` 與 `.claude/agents/` 底下——
-Claude Code 只有在你從一個 `.claude/` 目錄底下包含這些檔案的資料夾執行 `claude`
-時，才會偵測到這些專案層級的指令／agent。請從這個 repo 的 checkout 目錄執行
-`claude` 來使用它們（實際的電影專案不需要放在這裡——`/create-film "Title" [path]`
-可以接受目的地路徑作為參數，預設會建立在你執行 `claude` 當下所在目錄底下的
-`./<slugified-title>`）。如果你想從其他工作目錄，或是一個獨立的、只放電影專案的
-repo 使用這些指令，可以把 `.claude/commands/ai-film-setup.md`、
-`.claude/commands/create-film.md`，以及 `.claude/agents/` 底下的五個檔案，複製或
-建立符號連結到該目錄自己的 `.claude/`（或是放到 `~/.claude/commands/` 與
+**使用方式：** `/ai-film-setup`、`/create-film` 與 `/analyze-reference` 這三個
+指令，以及它們用到的六個 agent，都放在這個 repo 自己的 `.claude/commands/` 與
+`.claude/agents/` 底下——Claude Code 只有在你從一個 `.claude/` 目錄底下包含這些
+檔案的資料夾執行 `claude` 時，才會偵測到這些專案層級的指令／agent。請從這個
+repo 的 checkout 目錄執行 `claude` 來使用它們（實際的電影專案不需要放在這裡——
+`/create-film "Title" [path]` 可以接受目的地路徑作為參數，預設會建立在你執行
+`claude` 當下所在目錄底下的 `./<slugified-title>`）。如果你想從其他工作目錄，
+或是一個獨立的、只放電影專案的 repo 使用這些指令，可以把
+`.claude/commands/ai-film-setup.md`、`.claude/commands/create-film.md`、
+`.claude/commands/analyze-reference.md`，以及 `.claude/agents/` 底下的六個檔案，
+複製或建立符號連結到該目錄自己的 `.claude/`（或是放到 `~/.claude/commands/` 與
 `~/.claude/agents/`，讓它們在任何地方都能使用）。
 
 依照這些設計文件裡的 Future Extensions：如果鏡頭數量多到需要獨立一個 context 才

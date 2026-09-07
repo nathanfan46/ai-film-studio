@@ -134,10 +134,14 @@ def _visual_change_level(mean_score: float) -> str:
 
 def _extract_keyframe(video_path: Path, timestamp: float, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        ["ffmpeg", "-y", "-ss", str(timestamp), "-i", str(video_path), "-frames:v", "1", str(output_path)],
-        check=True, capture_output=True,
-    )
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-ss", str(timestamp), "-i", str(video_path), "-frames:v", "1", str(output_path)],
+            check=True, capture_output=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode(errors="replace") if exc.stderr else ""
+        raise RuntimeError(f"ffmpeg failed extracting keyframe: {stderr}") from exc
 
 
 _KEYFRAME_START_OFFSET = 0.1
