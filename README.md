@@ -183,8 +183,9 @@ to end up the same length.
 shot's last frame (extracted via ffmpeg) and pairs it with this shot's own locked
 storyboard image as an end frame — true dual-keyframe continuity, for a shot that
 should visibly continue the previous one's action instead of resetting on the cut.
-Only models in `MODELS_WITH_END_IMAGE_URL` (currently `h3-max`, verified against
-fal.ai's own OpenAPI schema) actually honor the end frame; other models still get the
+Only models in `MODELS_WITH_END_IMAGE_URL` (currently `h3-max` and `seedance-2.5`,
+verified against each model's own fal.ai OpenAPI schema) actually honor the end frame;
+other models still get the
 extracted last frame as their sole starting reference. It degrades gracefully — with
 no predecessor shot, no predecessor video yet, or no locked storyboard image yet, it
 falls back to normal single-image generation and prints why, never errors.
@@ -248,6 +249,19 @@ most specific matching tag wins (`continue_from_previous` is checked before
 `dialogue`/`silent`); a shot with no matching tag configured falls back to
 `providers.video.model`. See `_shot_features`/`_video_model` in `src/ai_film/cli.py`
 if you're adding a new tag.
+
+**`seedance-2.5`** (ByteDance, via fal.ai) generates up to 30 seconds natively in one
+call, versus the few-second clips every other video model here is limited to. Useful
+for a beat that's genuinely one continuous physical action (a character answers a
+ringing phone, say) — writing it as one longer shot instead of splitting it into
+several short ones avoids a real, observed failure mode where each independently
+generated shot re-invents the transition (the phone ends shot A already at her ear,
+then shot B has her pick it up again from scratch), since nothing carries true motion
+continuity across an artificial cut the way one continuous generation does. It does
+not help multi-camera coverage of the same action (a fight scene cut between a wide
+shot and a close-up) — every independent generation call still has no memory of any
+other one, so the same choreography still needs to actually match across the cut by
+some other means, not just a longer single clip.
 
 The last four are the media review layer, for reviewing generated video/audio and
 fixing cheap timing issues without a provider call:

@@ -575,6 +575,92 @@ def test_h3_max_sends_end_image_url_for_dual_keyframe_continuity(
 
 
 @patch("ai_film.providers.fal.client.requests")
+def test_seedance_2_5_sends_bare_string_duration_clamped_to_4_30_range(
+    mock_requests, tmp_path: Path, monkeypatch
+):
+    """Verified against fal.ai's real OpenAPI schema for
+    bytedance/seedance-2.5/image-to-video: duration is the enum
+    "auto" | "4".."30" — bare integer strings, no "s" suffix, and any
+    integer outside 4-30 must be clamped rather than sent raw."""
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    _mock_submit_response(mock_requests)
+    reference = tmp_path / "ref.png"
+    reference.write_bytes(b"REF-PNG")
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file", lambda path: "https://cdn.fal.run/ref.png"
+    )
+
+    provider = FalVideoProvider()
+    provider.submit(
+        VideoGenerationRequest(
+            prompt="a fight scene", model="seedance-2.5", reference_paths=[str(reference)],
+            duration_seconds=45, output_path=str(tmp_path / "out.mp4"),
+        )
+    )
+
+    called_url = mock_requests.post.call_args.args[0]
+    assert called_url == "https://queue.fal.run/bytedance/seedance-2.5/image-to-video"
+    sent_input = mock_requests.post.call_args.kwargs["json"]
+    assert sent_input["duration"] == "30"
+    assert isinstance(sent_input["duration"], str)
+    assert sent_input["generate_audio"] is False
+    assert sent_input["image_url"] == "https://cdn.fal.run/ref.png"
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_seedance_2_5_clamps_duration_below_range_to_minimum(
+    mock_requests, tmp_path: Path, monkeypatch
+):
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    _mock_submit_response(mock_requests)
+    reference = tmp_path / "ref.png"
+    reference.write_bytes(b"REF-PNG")
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file", lambda path: "https://cdn.fal.run/ref.png"
+    )
+
+    provider = FalVideoProvider()
+    provider.submit(
+        VideoGenerationRequest(
+            prompt="a quick beat", model="seedance-2.5", reference_paths=[str(reference)],
+            duration_seconds=2, output_path=str(tmp_path / "out.mp4"),
+        )
+    )
+
+    sent_input = mock_requests.post.call_args.kwargs["json"]
+    assert sent_input["duration"] == "4"
+
+
+@patch("ai_film.providers.fal.client.requests")
+def test_seedance_2_5_sends_end_image_url_for_dual_keyframe_continuity(
+    mock_requests, tmp_path: Path, monkeypatch
+):
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    _mock_submit_response(mock_requests)
+    reference = tmp_path / "start.png"
+    reference.write_bytes(b"START-PNG")
+    end_reference = tmp_path / "end.png"
+    end_reference.write_bytes(b"END-PNG")
+    monkeypatch.setattr(
+        "ai_film.providers.fal.client.upload_file",
+        lambda path: f"https://cdn.fal.run/{Path(path).name}",
+    )
+
+    provider = FalVideoProvider()
+    provider.submit(
+        VideoGenerationRequest(
+            prompt="a fight scene", model="seedance-2.5", reference_paths=[str(reference)],
+            end_reference_path=str(end_reference),
+            duration_seconds=10, output_path=str(tmp_path / "out.mp4"),
+        )
+    )
+
+    sent_input = mock_requests.post.call_args.kwargs["json"]
+    assert sent_input["image_url"] == "https://cdn.fal.run/start.png"
+    assert sent_input["end_image_url"] == "https://cdn.fal.run/end.png"
+
+
+@patch("ai_film.providers.fal.client.requests")
 def test_hailuo_ignores_end_reference_path_since_its_schema_has_no_such_field(
     mock_requests, tmp_path: Path, monkeypatch
 ):
@@ -834,7 +920,23 @@ def test_video_format_fields_for_hailuo_is_empty_no_native_fields_exist():
 
 
 def test_models_requiring_resized_reference_is_h3_max_and_both_hailuo_models():
-    assert MODELS_REQUIRING_RESIZED_REFERENCE == {"h3-max", "hailuo-2.3", "hailuo-2.3-fast"}
+    assert MODELS_REQUIRING_RESIZED_REFERENCE == {
+        "h3-max", "hailuo-2.3", "hailuo-2.3-fast", "seedance-2.5",
+    }
+
+
+def test_video_format_fields_for_seedance_2_5_sends_resolution_only():
+    """seedance-2.5's aspect_ratio field is a constant "auto" per its real
+    OpenAPI schema (not a real per-request control, despite fal's own
+    marketing page implying selectable enum values) — only resolution is
+    a genuine request field."""
+    fields = _video_format_fields("seedance-2.5", 1280, 720)
+    assert fields == {"resolution": "720p"}
+
+
+def test_video_format_fields_for_seedance_2_5_picks_1080p_tier():
+    fields = _video_format_fields("seedance-2.5", 1920, 1080)
+    assert fields == {"resolution": "1080p"}
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")

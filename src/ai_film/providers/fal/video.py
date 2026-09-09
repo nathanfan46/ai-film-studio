@@ -14,12 +14,17 @@ MODEL_TO_APP_ID = {
     "veo-3": "fal-ai/veo3",
     "seedance-1-0-pro": "fal-ai/seedance-1-0-pro",
     "kling-v3-pro": "fal-ai/kling-video/v3/pro",
-    # These three are already image-to-video-native endpoints (there is no
+    # These four are already image-to-video-native endpoints (there is no
     # separate text-to-video app_id to fall back to for them the way veo-3
     # has) — verified directly against fal.ai's OpenAPI schema for each.
     "hailuo-2.3": "fal-ai/minimax/hailuo-2.3/standard/image-to-video",
     "hailuo-2.3-fast": "fal-ai/minimax/hailuo-2.3-fast/pro/image-to-video",
     "h3-max": "minimax/h3-max/image-to-video",  # note: no "fal-ai/" prefix
+    # No "fal-ai/" prefix, same as h3-max — verified by successfully fetching
+    # this exact endpoint_id's real OpenAPI schema. image_url is a required
+    # field on this endpoint (not just image-conditioned), so this model has
+    # no text-only path either, same accepted limitation as the three above.
+    "seedance-2.5": "bytedance/seedance-2.5/image-to-video",
 }
 
 # Image-conditioned generation requires a distinct endpoint per model — the
@@ -41,9 +46,14 @@ MODEL_ALLOWED_DURATIONS = {
 }
 
 # hailuo-2.3's "duration" field is a bare numeric string ("6"/"10"), not
-# suffixed with "s" like veo-3/seedance/kling. Verified against fal.ai's
-# OpenAPI schema for fal-ai/minimax/hailuo-2.3/standard/image-to-video.
-_BARE_STRING_DURATION_MODELS = {"hailuo-2.3"}
+# suffixed with "s" like veo-3/seedance-1-0-pro/kling. Verified against
+# fal.ai's OpenAPI schema for fal-ai/minimax/hailuo-2.3/standard/image-to-video.
+# seedance-2.5 joins this set for the same reason — its own OpenAPI schema
+# gives duration as the enum "auto" | "4".."30", bare integer strings with
+# no "s" suffix (contradicts fal's own marketing page for this model, which
+# describes duration as "auto"/"4"-"30" without specifying the wire format —
+# the real schema is the authority here).
+_BARE_STRING_DURATION_MODELS = {"hailuo-2.3", "seedance-2.5"}
 
 # h3-max's "duration" field is a plain integer (seconds), not a string at
 # all. Verified against fal.ai's OpenAPI schema for
@@ -62,7 +72,7 @@ _NO_DURATION_FIELD_MODELS = {"hailuo-2.3-fast"}
 # shot and voiced separately via the voice-generation stage — the video
 # model must never invent its own spoken lines, so audio generation is
 # turned off at the source for these models.
-MODELS_WITH_AUTO_AUDIO = {"veo-3"}
+MODELS_WITH_AUTO_AUDIO = {"veo-3", "seedance-2.5"}
 
 # Models whose endpoint accepts a separate end_image_url, i.e. true
 # first-frame-to-last-frame (dual-keyframe) generation — verified against
@@ -71,7 +81,7 @@ MODELS_WITH_AUTO_AUDIO = {"veo-3"}
 # frame, for first-to-last keyframe generation." hailuo-2.3/veo-3/etc.
 # have no such field; end_reference_path is silently ignored for them, so
 # a caller can always pass one without needing to know per-model support.
-MODELS_WITH_END_IMAGE_URL = {"h3-max"}
+MODELS_WITH_END_IMAGE_URL = {"h3-max", "seedance-2.5"}
 
 # Verified against fal's real OpenAPI schemas — see the design spec's
 # provider capability table. veo-3 has both resolution (720p/1080p) and
@@ -81,12 +91,25 @@ MODELS_WITH_END_IMAGE_URL = {"h3-max"}
 _VEO3_RESOLUTION_TIERS = {720: "720p", 1080: "1080p"}
 _VEO3_ASPECT_RATIOS = {"16:9", "9:16"}
 _H3_MAX_RESOLUTION_TIERS = {480: "480P", 768: "768P"}
+_SEEDANCE_2_5_RESOLUTION_TIERS = {480: "480p", 720: "720p", 1080: "1080p"}
+
+# seedance-2.5 allows any integer duration in this inclusive range (its
+# OpenAPI schema's duration enum is "auto" plus every integer "4".."30"),
+# not a small fixed set of clip lengths like MODEL_ALLOWED_DURATIONS below
+# — clamp to the range instead of snapping to the nearest of a short tuple.
+MODEL_DURATION_RANGES = {"seedance-2.5": (4, 30)}
 
 # Models whose output aspect ratio is controlled entirely by the input
 # reference image, not a request field — the target aspect ratio can only
 # reach the provider by resizing the reference image itself before
 # upload. veo-3 is excluded: its own aspect_ratio field already covers it.
-MODELS_REQUIRING_RESIZED_REFERENCE = {"h3-max", "hailuo-2.3", "hailuo-2.3-fast"}
+# seedance-2.5 belongs here for a distinct reason from the hailuo family:
+# its OpenAPI schema does list an "aspect_ratio" field, but describes it as
+# a constant always equal to "auto" — not a real selectable control, despite
+# fal's own marketing page for this model listing several enum values
+# (16:9/9:16/21:9/etc.) as if they were honored. The real schema is the
+# authority; the field is not sent at all (see _video_format_fields).
+MODELS_REQUIRING_RESIZED_REFERENCE = {"h3-max", "hailuo-2.3", "hailuo-2.3-fast", "seedance-2.5"}
 
 
 def _nearest_aspect_ratio_enum(width: int, height: int, allowed: set[str]) -> str:
@@ -116,6 +139,12 @@ def _video_format_fields(model: str, width: int, height: int) -> dict:
     if model == "h3-max":
         tier = min(_H3_MAX_RESOLUTION_TIERS, key=lambda t: abs(t - height))
         return {"resolution": _H3_MAX_RESOLUTION_TIERS[tier]}
+    if model == "seedance-2.5":
+        # No aspect_ratio field sent — it's a constant "auto" on this
+        # endpoint (see MODELS_REQUIRING_RESIZED_REFERENCE), so only
+        # resolution is a real request field here.
+        tier = min(_SEEDANCE_2_5_RESOLUTION_TIERS, key=lambda t: abs(t - height))
+        return {"resolution": _SEEDANCE_2_5_RESOLUTION_TIERS[tier]}
     return {}
 
 
@@ -159,6 +188,10 @@ MODELS_WITH_NEGATIVE_PROMPT = {"veo-3"}
 
 
 def _snap_duration(model: str, duration_seconds: float) -> int:
+    duration_range = MODEL_DURATION_RANGES.get(model)
+    if duration_range:
+        low, high = duration_range
+        return max(low, min(high, round(duration_seconds)))
     allowed = MODEL_ALLOWED_DURATIONS.get(model)
     if not allowed:
         return int(duration_seconds)

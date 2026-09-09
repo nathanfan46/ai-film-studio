@@ -7,6 +7,11 @@ _MODELS = [
     ModelInfo("fal", "nano-banana-pro", Capability.IMAGE, "Nano Banana Pro (high fidelity)"),
     ModelInfo("fal", "veo-3", Capability.VIDEO, "Veo 3 (Google DeepMind)"),
     ModelInfo("fal", "seedance-1-0-pro", Capability.VIDEO, "Seedance 1.0 Pro"),
+    ModelInfo(
+        "fal", "seedance-2.5", Capability.VIDEO,
+        "Seedance 2.5 (ByteDance, up to 30s native duration, 480p/720p/1080p,"
+        " $0.13-0.47/s) - fewer cuts needed for one continuous beat",
+    ),
     ModelInfo("fal", "kling-v3-pro", Capability.VIDEO, "Kling Video v3 Pro"),
     ModelInfo(
         "fal", "hailuo-2.3", Capability.VIDEO,
