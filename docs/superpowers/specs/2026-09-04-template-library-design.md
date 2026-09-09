@@ -290,10 +290,14 @@ an image generation call) additionally computes each resolved path's
 ```
 
 No new version-numbering scheme — a content hash needs no separate
-"current version" pointer to maintain, and this project already
-identifies artifacts by `sha256` (see `shot.json`'s existing
-`artifact.sha256` field), so this reuses an established identity
-convention rather than inventing one.
+"current version" pointer to maintain. Note: `shot.json`'s existing
+`artifact.sha256` field is schema-reserved but currently always written
+as `None` in practice (`_image_artifact`/`_video_or_audio_artifact` in
+`generation_service.py` never compute it) — this feature is the first
+thing to actually populate a sha256 field in this data model, not a
+reuse of an already-working mechanism. The schema already having a slot
+for it is still worth noting: content-hash identity is a natural fit
+here, not a foreign concept being bolted on.
 
 **`ai-film check-stale --path <project>`** — read-only, walks every shot
 with a completed image generation, recomputes the *current* `sha256` of
