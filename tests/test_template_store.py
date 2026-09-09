@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_film.template_store import save_template
+from ai_film.template_store import save_template, list_templates, show_template
 
 
 def _draft(**overrides) -> dict:
@@ -104,3 +104,42 @@ def test_save_template_force_overwrites(tmp_path: Path):
     save_template(draft_path, "hero-orbit", templates_dir)
 
     save_template(draft_path, "hero-orbit", templates_dir, force=True)  # must not raise
+
+
+def test_list_templates_empty_directory_returns_empty_list(tmp_path: Path):
+    assert list_templates(tmp_path / "templates") == []
+
+
+def test_list_templates_returns_id_name_and_pattern_count(tmp_path: Path):
+    draft_path = tmp_path / "draft.json"
+    _write_draft(draft_path, _draft())
+    templates_dir = tmp_path / "templates"
+    save_template(draft_path, "hero-orbit", templates_dir)
+
+    results = list_templates(templates_dir)
+
+    assert results == [{"id": "hero-orbit", "name": "Hero Orbit Reveal", "shot_pattern_count": 1}]
+
+
+def test_list_templates_skips_directories_without_template_json(tmp_path: Path):
+    templates_dir = tmp_path / "templates"
+    (templates_dir / "not-a-template").mkdir(parents=True)
+
+    assert list_templates(templates_dir) == []
+
+
+def test_show_template_returns_full_content(tmp_path: Path):
+    draft_path = tmp_path / "draft.json"
+    _write_draft(draft_path, _draft())
+    templates_dir = tmp_path / "templates"
+    save_template(draft_path, "hero-orbit", templates_dir)
+
+    result = show_template("hero-orbit", templates_dir)
+
+    assert result["id"] == "hero-orbit"
+    assert result["name"] == "Hero Orbit Reveal"
+
+
+def test_show_template_rejects_unknown_id(tmp_path: Path):
+    with pytest.raises(ValueError, match="not found"):
+        show_template("does-not-exist", tmp_path / "templates")

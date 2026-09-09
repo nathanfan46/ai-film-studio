@@ -46,3 +46,27 @@ def save_template(
     draft["id"] = template_id
     (target_dir / "template.json").write_text(json.dumps(draft, indent=2, ensure_ascii=False))
     return draft
+
+
+def list_templates(templates_dir: Path) -> list[dict]:
+    if not templates_dir.exists():
+        return []
+    results = []
+    for template_dir in sorted(p for p in templates_dir.iterdir() if p.is_dir()):
+        template_path = template_dir / "template.json"
+        if not template_path.exists():
+            continue
+        data = json.loads(template_path.read_text())
+        results.append({
+            "id": data.get("id", template_dir.name),
+            "name": data.get("name", ""),
+            "shot_pattern_count": len(data.get("shot_patterns", [])),
+        })
+    return results
+
+
+def show_template(template_id: str, templates_dir: Path) -> dict:
+    template_path = templates_dir / template_id / "template.json"
+    if not template_path.exists():
+        raise ValueError(f"template not found: {template_id}")
+    return json.loads(template_path.read_text())
