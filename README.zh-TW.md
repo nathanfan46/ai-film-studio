@@ -224,6 +224,18 @@ agent 讀取這份分析，用自己的視覺能力查看關鍵影格，填入�
 當作參考依據使用之前，先取得你的核准。若分析結果已被核准，重新執行會被拒絕——想重新分析的話，
 請先移動或改名既有的檔案。
 
+`save-template --from <draft.json> --id <id> [--force]` 會驗證一份 draft template
+是否符合 schema，並存到 `templates/<id>/`，同時複製任何被引用到的關鍵影格圖片——
+`/analyze-reference` 的 agent 在你核准分析結果後，會自動幫你寫出這份 draft。
+`list-templates` 與 `show-template --id <id>` 可以列出與查看已存的 template。
+`export-template --id <id> --output <file.zip>` ／ `import-template --from <file.zip>
+[--id <override>] [--force]` 會把 template 包成可攜式 zip 檔——分享 template 給別人，
+分享的是拍攝手法／節奏的配方，不是運算資源；對方仍然需要自己安裝 `ai-film-studio`
+並擁有自己的 `FAL_KEY` 才能實際生成任何內容。專案要使用已存的 template，需要在
+`config.json` 頂層加上 `"template": "<id>"`（在 `/ai-film-setup` 時設定，或事後手動
+加入）——Director 與 Storyboard agent 之後會把它的 `shot_patterns` 當作選填的參考依
+據，但絕不會蓋過故事本身的明確要求。
+
 **影片模型可以依鏡頭特徵個別設定**，透過 `config.json` 的
 `providers.video.model_by_feature`，這樣你就不用為了某些需要不同模型能力的鏡頭，
 反覆切換整個專案的預設模型：

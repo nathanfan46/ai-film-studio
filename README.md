@@ -227,6 +227,19 @@ look, and gets your approval before the brief is used as grounding context by
 `/create-film`'s Director and Storyboard agents. Refuses to re-run over an approved
 brief — move or rename it first if you want to redo the analysis from scratch.
 
+`save-template --from <draft.json> --id <id> [--force]` validates a draft template
+against the schema and saves it to `templates/<id>/`, copying any referenced keyframe
+images alongside it — `/analyze-reference`'s agent offers to write this draft
+automatically after you approve its analysis. `list-templates` and
+`show-template --id <id>` enumerate and inspect what's saved. `export-template --id
+<id> --output <file.zip>` / `import-template --from <file.zip> [--id <override>]
+[--force]` bundle a template as a portable zip — handing someone a template shares a
+camera/pacing recipe, not compute; they still need their own `ai-film-studio` install
+and `FAL_KEY` to generate anything with it. A project opts into a saved template via
+`config.json`'s top-level `"template": "<id>"` key (set during `/ai-film-setup` or by
+hand) — the Director and Storyboard agents then use its `shot_patterns` as optional
+grounding when drafting shots, never overriding an explicit story requirement.
+
 **Video model selection is configurable per shot feature**, via `config.json`'s
 `providers.video.model_by_feature`, so you don't have to flip the project-wide
 default model back and forth for shots that need a different model's capabilities:
