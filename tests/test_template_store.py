@@ -1,9 +1,10 @@
 import json
+import zipfile
 from pathlib import Path
 
 import pytest
 
-from ai_film.template_store import save_template, list_templates, show_template
+from ai_film.template_store import save_template, list_templates, show_template, export_template, import_template
 
 
 def _draft(**overrides) -> dict:
@@ -143,3 +144,81 @@ def test_show_template_returns_full_content(tmp_path: Path):
 def test_show_template_rejects_unknown_id(tmp_path: Path):
     with pytest.raises(ValueError, match="not found"):
         show_template("does-not-exist", tmp_path / "templates")
+
+
+def test_export_template_rejects_unknown_id(tmp_path: Path):
+    with pytest.raises(ValueError, match="not found"):
+        export_template("does-not-exist", tmp_path / "templates", tmp_path / "out.zip")
+
+
+def test_export_then_import_round_trips_template_json_and_keyframes(tmp_path: Path):
+    keyframe = tmp_path / "shot1_start.jpg"
+    keyframe.write_bytes(b"FAKE-JPG")
+    draft = _draft()
+    draft["shot_patterns"][0]["reference_keyframe"] = "shot1_start.jpg"
+    draft_path = tmp_path / "draft.json"
+    _write_draft(draft_path, draft)
+    templates_dir = tmp_path / "templates"
+    save_template(draft_path, "hero-orbit", templates_dir)
+
+    archive_path = tmp_path / "hero-orbit.zip"
+    export_template("hero-orbit", templates_dir, archive_path)
+    assert archive_path.exists()
+    with zipfile.ZipFile(archive_path) as zf:
+        assert "template.json" in zf.namelist()
+        assert "keyframes/shot1_start.jpg" in zf.namelist()
+
+    new_templates_dir = tmp_path / "imported-templates"
+    result = import_template(archive_path, new_templates_dir)
+
+    assert result["id"] == "hero-orbit"
+    imported = json.loads((new_templates_dir / "hero-orbit" / "template.json").read_text())
+    assert imported["name"] == "Hero Orbit Reveal"
+    assert (new_templates_dir / "hero-orbit" / "keyframes" / "shot1_start.jpg").exists()
+
+
+def test_import_template_honors_id_override(tmp_path: Path):
+    draft_path = tmp_path / "draft.json"
+    _write_draft(draft_path, _draft())
+    templates_dir = tmp_path / "templates"
+    save_template(draft_path, "hero-orbit", templates_dir)
+    archive_path = tmp_path / "hero-orbit.zip"
+    export_template("hero-orbit", templates_dir, archive_path)
+
+    new_templates_dir = tmp_path / "imported-templates"
+    result = import_template(archive_path, new_templates_dir, template_id="hero-orbit-v2")
+
+    assert result["id"] == "hero-orbit-v2"
+    assert (new_templates_dir / "hero-orbit-v2" / "template.json").exists()
+
+
+def test_import_template_rejects_archive_without_template_json(tmp_path: Path):
+    archive_path = tmp_path / "bad.zip"
+    with zipfile.ZipFile(archive_path, "w") as zf:
+        zf.writestr("not-a-template.txt", "hello")
+
+    with pytest.raises(ValueError, match="template.json"):
+        import_template(archive_path, tmp_path / "templates")
+
+
+def test_import_template_rejects_invalid_template_json(tmp_path: Path):
+    archive_path = tmp_path / "bad.zip"
+    invalid = _draft()
+    del invalid["shot_patterns"]
+    with zipfile.ZipFile(archive_path, "w") as zf:
+        zf.writestr("template.json", json.dumps(invalid))
+
+    with pytest.raises(ValueError, match="schema validation"):
+        import_template(archive_path, tmp_path / "templates")
+
+
+def test_import_template_refuses_existing_without_force(tmp_path: Path):
+    draft_path = tmp_path / "draft.json"
+    _write_draft(draft_path, _draft())
+    templates_dir = tmp_path / "templates"
+    save_template(draft_path, "hero-orbit", templates_dir)
+    archive_path = tmp_path / "hero-orbit.zip"
+    export_template("hero-orbit", templates_dir, archive_path)
+
+    with pytest.raises(RuntimeError, match="already exists"):
+        import_template(archive_path, templates_dir)

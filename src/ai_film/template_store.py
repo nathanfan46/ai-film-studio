@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import zipfile
 from pathlib import Path
 
 from ai_film.schema import validate_template
@@ -70,3 +71,49 @@ def show_template(template_id: str, templates_dir: Path) -> dict:
     if not template_path.exists():
         raise ValueError(f"template not found: {template_id}")
     return json.loads(template_path.read_text())
+
+
+def export_template(template_id: str, templates_dir: Path, output_path: Path) -> None:
+    source_dir = templates_dir / template_id
+    if not source_dir.exists():
+        raise ValueError(f"template not found: {template_id}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file_path in sorted(source_dir.rglob("*")):
+            if file_path.is_file():
+                zf.write(file_path, file_path.relative_to(source_dir))
+
+
+def import_template(
+    from_path: Path,
+    templates_dir: Path,
+    template_id: str | None = None,
+    force: bool = False,
+) -> dict:
+    if not from_path.exists():
+        raise ValueError(f"archive not found: {from_path}")
+
+    with zipfile.ZipFile(from_path) as zf:
+        names = zf.namelist()
+        if "template.json" not in names:
+            raise ValueError(f"{from_path} does not contain a template.json")
+        draft = json.loads(zf.read("template.json"))
+        errors = validate_template(draft)
+        if errors:
+            raise ValueError(f"imported template.json failed schema validation: {'; '.join(errors)}")
+
+        resolved_id = template_id or draft.get("id")
+        if not resolved_id:
+            raise ValueError("no --id given and template.json has no id field")
+
+        target_dir = templates_dir / resolved_id
+        if target_dir.exists():
+            if not force:
+                raise RuntimeError(f"{target_dir} already exists — pass --force to overwrite")
+            shutil.rmtree(target_dir)
+        target_dir.mkdir(parents=True)
+        zf.extractall(target_dir)
+
+    draft["id"] = resolved_id
+    (target_dir / "template.json").write_text(json.dumps(draft, indent=2, ensure_ascii=False))
+    return draft
