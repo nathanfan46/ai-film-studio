@@ -82,3 +82,62 @@ def test_show_template_cmd_rejects_unknown_id(tmp_path: Path):
     )
     assert result.exit_code == 1
     assert "not found" in result.output
+
+
+def test_export_and_import_template_cmd_round_trip(tmp_path: Path):
+    draft_path = tmp_path / "draft.json"
+    draft_path.write_text(json.dumps(_draft()))
+    templates_dir = tmp_path / "templates"
+    runner.invoke(
+        app,
+        [
+            "save-template", "--from", str(draft_path), "--id", "hero-orbit",
+            "--templates-dir", str(templates_dir),
+        ],
+    )
+    archive_path = tmp_path / "hero-orbit.zip"
+
+    export_result = runner.invoke(
+        app,
+        [
+            "export-template", "--id", "hero-orbit", "--templates-dir", str(templates_dir),
+            "--output", str(archive_path),
+        ],
+    )
+    assert export_result.exit_code == 0
+    assert archive_path.exists()
+
+    new_templates_dir = tmp_path / "imported-templates"
+    import_result = runner.invoke(
+        app,
+        [
+            "import-template", "--from", str(archive_path),
+            "--templates-dir", str(new_templates_dir),
+        ],
+    )
+    assert import_result.exit_code == 0
+    assert (new_templates_dir / "hero-orbit" / "template.json").exists()
+
+
+def test_export_template_cmd_rejects_unknown_id(tmp_path: Path):
+    result = runner.invoke(
+        app,
+        [
+            "export-template", "--id", "does-not-exist", "--templates-dir", str(tmp_path / "templates"),
+            "--output", str(tmp_path / "out.zip"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "not found" in result.output
+
+
+def test_import_template_cmd_rejects_missing_archive(tmp_path: Path):
+    result = runner.invoke(
+        app,
+        [
+            "import-template", "--from", str(tmp_path / "missing.zip"),
+            "--templates-dir", str(tmp_path / "templates"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "not found" in result.output

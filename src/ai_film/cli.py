@@ -43,6 +43,8 @@ from ai_film.video_diagnostics import diagnose_video as diagnose_video_service
 from ai_film.video_diagnostics import extract_last_frame
 from ai_film.reference_analysis import analyze_reference_video as analyze_reference_video_service
 from ai_film.template_store import (
+    export_template as export_template_service,
+    import_template as import_template_service,
     list_templates as list_templates_service,
     save_template as save_template_service,
     show_template as show_template_service,
@@ -987,6 +989,39 @@ def show_template_cmd(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
     typer.echo(json.dumps(template, indent=2, ensure_ascii=False))
+
+
+@app.command(name="export-template")
+def export_template_cmd(
+    id: str = typer.Option(..., "--id"),
+    templates_dir: Path = typer.Option(DEFAULT_TEMPLATES_PATH, "--templates-dir"),
+    output: Path = typer.Option(..., "--output"),
+) -> None:
+    """Bundle a saved template's template.json and keyframes into a zip
+    archive that can be handed to someone else's ai-film-studio install."""
+    try:
+        export_template_service(id, templates_dir, output)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"exported {id} -> {output}")
+
+
+@app.command(name="import-template")
+def import_template_cmd(
+    from_: Path = typer.Option(..., "--from"),
+    templates_dir: Path = typer.Option(DEFAULT_TEMPLATES_PATH, "--templates-dir"),
+    id: str = typer.Option(None, "--id"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Import a template zip archive exported by export-template. Uses the
+    archive's own id unless --id overrides it."""
+    try:
+        result = import_template_service(from_, templates_dir, template_id=id, force=force)
+    except (ValueError, RuntimeError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"imported {result['id']} -> {templates_dir / result['id'] / 'template.json'}")
 
 
 @app.command(name="review-media")
