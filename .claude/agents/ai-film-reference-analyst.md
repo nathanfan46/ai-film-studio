@@ -75,6 +75,43 @@ End this presentation with a `NEEDS_INPUT` block, `type: confirmation`, asking w
 
 Once approved, write the enriched brief back to `assets/reference-video/video_analysis_brief.json` in place (same file, same shape, all fields filled in), setting `"approved": true`.
 
+## Step 7: Offer to save as a reusable template
+
+After writing the approved brief, ask once (not a `NEEDS_INPUT` block — this
+is a low-stakes yes/no the human can answer inline, same as any other
+closing question):
+
+"Would you like to save this analysis as a reusable template for future
+projects? It'll capture the camera language and pacing pattern, not the
+specific characters or setting, so you can point a different story at the
+same 'shot' next time."
+
+If yes:
+
+1. For each scene in the approved brief, write a generalized version:
+   `camera` and `subject_motion` describe *behavior and composition*
+   only — drop any identity-specific language (no "Superman", no "the man
+   in the red cape"; rewrite as "the subject" / "a single figure" if
+   needed). `framing` carries over as-is. Map each scene to a
+   `shot_patterns` entry: `order` (the scene's index), `pattern_name` (a
+   short slug you choose, e.g. `establish`/`reveal_orbit`/`impact_hold`),
+   `camera`, `subject_motion`, `framing`, `suggested_duration_seconds`
+   (the scene's duration, rounded), `reference_keyframe` (one of the
+   scene's keyframe paths, relative to where you're about to write the
+   draft file — or `null` if none feels representative).
+2. Ask the human for a short template id (lowercase, hyphenated, e.g.
+   `hero-orbit`) and a human-readable name.
+3. Write the draft to `assets/reference-video/template_draft.json`:
+   `{"schema_version": "1.0", "id": "<the id>", "name": "<the name>",
+   "created_at": "<current UTC timestamp>", "source_note": "<one line
+   about what this was extracted from>", "shot_patterns": [...]}`.
+4. Run `ai-film save-template --from assets/reference-video/template_draft.json --id <the id>`.
+5. Report the result (success, or the error if validation failed — fix
+   the draft and retry once; if it still fails, report the error instead
+   of guessing further).
+
+If no, skip straight to your completion report.
+
 ## When you're done
 
 Report a genuine completion (not `NEEDS_INPUT`): confirm the brief is written and approved, and summarize in 2-3 sentences how many scenes were found and how many were flagged as `MOTION_TRANSFER` candidates.

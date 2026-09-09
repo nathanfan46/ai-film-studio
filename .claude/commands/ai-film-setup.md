@@ -45,7 +45,13 @@ Show the user the current values from `PROJECT_PATH/config.json`'s `render` sect
 
 This step exists because the format decision otherwise has nowhere reliable to land: if the user only mentions it in passing during the Director agent's story brainstorm (`/create-film`), it's easy for that preference to never get written anywhere, and every shot silently defaults to landscape — wasting a paid generation before anyone notices the mismatch. Asking here, once, up front, closes that gap regardless of whether the Director conversation also asks about it.
 
-## Step 4: Write the picks
+## Step 4: Optional template
+
+Ask: "Do you want to seed this project's shots from a saved camera/pacing template? Run `ai-film list-templates` to see what's available — reply with an id, or say no to skip." This is entirely optional and skippable; most projects have no template.
+
+If the user names one, write it into `config.json` as a new top-level key: `"template": "<the id>"`. Validate it exists first with `ai-film show-template --id <the id>` — if that fails, tell the user and ask again rather than writing an id that doesn't resolve to anything.
+
+## Step 5: Write the picks
 
 Read `PROJECT_PATH/config.json`. For each capability the user changed, update `providers.<capability>.provider` and `providers.<capability>.model` in place — leave `providers.<capability>.parameters` untouched (an empty object `{}` by default; only touch it if the user explicitly asks to set provider parameters). If the user picked a production format in Step 3 that differs from the current values, also update `render.resolution` (and `render.fps`, only if they asked for something other than `24`) under the top-level `render` key. Write the file back with 2-space indent and a trailing newline, matching the file `ai-film init` originally wrote — do not reorder existing top-level keys.
 
@@ -57,6 +63,6 @@ providers.video: unchanged (fal/veo-3)
 render.resolution: 1280x720 -> 720x1280 (portrait)
 ```
 
-## Step 5: Re-affirm the cost gate
+## Step 6: Re-affirm the cost gate
 
 Tell the user, briefly: nothing generates automatically just because a provider is configured here — every `generate-*`/`generate-candidates`/`edit-candidate` call still requires `ai-film approve-generation` first (the `/create-film` agents handle that for you, showing a cost estimate before asking).
