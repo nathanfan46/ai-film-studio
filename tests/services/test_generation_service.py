@@ -723,3 +723,54 @@ def test_generate_motion_transfer_skips_format_validation_for_mock_provider(tmp_
     )
 
     assert "requested_format" not in stage["artifact"]
+
+
+from ai_film.services.generation_service import sha256_of_file
+
+
+def test_sha256_of_file_matches_known_content(tmp_path: Path):
+    file_path = tmp_path / "ref.png"
+    file_path.write_bytes(b"REF-PNG-CONTENT")
+    import hashlib
+    expected = hashlib.sha256(b"REF-PNG-CONTENT").hexdigest()
+
+    assert sha256_of_file(file_path) == expected
+
+
+def test_generate_image_records_source_assets_with_current_hashes(tmp_path: Path):
+    project_dir = _project(tmp_path)
+    shot_path = _shot_path(project_dir)
+    approve_generation(project_dir, "storyboard", ["S01_SH01"], estimated_cost=0.1)
+    reference = project_dir / "assets" / "characters" / "mara" / "reference.png"
+    reference.parent.mkdir(parents=True)
+    reference.write_bytes(b"MARA-REFERENCE")
+
+    result = generate_image(
+        project_dir=project_dir, shot_path=shot_path, provider=MockImageProvider(),
+        prompt="a shot", model="nano-banana", reference_paths=[str(reference)],
+        output_path=project_dir / "04_storyboard" / "S01_SH01.png",
+        provider_name="mock",
+    )
+
+    assert result["source_assets"] == [
+        {"path": "assets/characters/mara/reference.png", "sha256": sha256_of_file(reference)}
+    ]
+
+
+def test_generate_image_skips_reference_paths_that_do_not_exist(tmp_path: Path):
+    """A reference_paths entry pointing at a file that doesn't exist (e.g.
+    a continuity master-shot reference that was never generated) must not
+    crash source_assets recording — it's silently omitted."""
+    project_dir = _project(tmp_path)
+    shot_path = _shot_path(project_dir)
+    approve_generation(project_dir, "storyboard", ["S01_SH01"], estimated_cost=0.1)
+
+    result = generate_image(
+        project_dir=project_dir, shot_path=shot_path, provider=MockImageProvider(),
+        prompt="a shot", model="nano-banana",
+        reference_paths=[str(project_dir / "does_not_exist.png")],
+        output_path=project_dir / "04_storyboard" / "S01_SH01.png",
+        provider_name="mock",
+    )
+
+    assert result["source_assets"] == []

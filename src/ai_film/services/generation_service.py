@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import shutil
 import subprocess
 import tempfile
@@ -43,6 +44,14 @@ class ArchiveResult:
     history: list[dict]
     archived_path: Path | None
     restore: Callable[[], None] | None
+
+
+def sha256_of_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _history_entry(stage_data: dict, version: int, artifact: dict, superseded_reason: str) -> dict:
@@ -122,6 +131,7 @@ def run_generation_stage(
     poll_interval_seconds: float = 0.0,
     force: bool = False,
     superseded_reason: str = "regenerate",
+    source_assets: list[dict] | None = None,
 ) -> dict:
     shot = load_shot(shot_path)
     shot_id = shot["id"]
@@ -185,6 +195,7 @@ def run_generation_stage(
         "inputs": stage_data.get("inputs", []),
         "artifact": artifact,
         "attempts": job_result.attempts,
+        "source_assets": source_assets or [],
     }
     save_shot(shot_path, shot)
     return shot["generation"][stage]
@@ -368,6 +379,14 @@ def generate_image(
         output_path=str(output_path), target_width=target_width, target_height=target_height,
     )
     validate = target_width and target_height and provider_name != "mock"
+    source_assets = [
+        {
+            "path": project_relative_path(p, project_dir),
+            "sha256": sha256_of_file(Path(p)),
+        }
+        for p in reference_paths
+        if Path(p).exists()
+    ]
 
     def _artifact(result):
         artifact = _image_artifact(result)
@@ -385,7 +404,7 @@ def generate_image(
         result_to_artifact=_artifact,
         provider_name=provider_name, model_name=model,
         max_attempts=max_attempts, poll_interval_seconds=poll_interval_seconds,
-        force=force,
+        force=force, source_assets=source_assets,
     )
 
 
