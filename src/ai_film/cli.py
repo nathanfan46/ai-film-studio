@@ -10,6 +10,7 @@ from dotenv import find_dotenv, load_dotenv
 
 from ai_film import __version__
 from ai_film.approval import approve_generation as approve_generation_service
+from ai_film.asset_staleness import check_stale as check_stale_service
 from ai_film.batch import run_bounded
 from ai_film.errors import CostGateError, ProviderError
 from ai_film.models import Capability
@@ -144,6 +145,22 @@ def validate_cmd(path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path")) -> N
             typer.echo(f"{shot_path.name}: valid")
     if had_errors:
         raise typer.Exit(code=1)
+
+
+@app.command(name="check-stale")
+def check_stale_cmd(path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path")) -> None:
+    """Report shots whose generated image was built against a character or
+    environment reference that has since changed. Read-only — never
+    triggers regeneration itself."""
+    stale = check_stale_service(path)
+    if not stale:
+        typer.echo("no stale shots")
+        return
+    typer.echo(f"{len(stale)} shot(s) reference a changed asset:")
+    for entry in stale:
+        typer.echo(f"\n{entry['shot_id']}")
+        for asset_path in entry["changed_assets"]:
+            typer.echo(f"  {asset_path} changed since generation")
 
 
 def _stage_config(path: Path, stage: str, default: dict | None = None) -> dict:
