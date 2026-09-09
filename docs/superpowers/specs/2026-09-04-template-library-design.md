@@ -261,6 +261,112 @@ purpose.
   for this project's shots? (`list-templates` to see options)" — writing
   the choice into `config.json`. Skippable; defaults to none.
 
+## Asset staleness tracking
+
+The real motivation for this section: change a locked character's
+reference image, and today nothing tells you which already-generated
+shots were built against the old one. This is the concrete substance
+behind "fork a project and know what needs regenerating" — not a fork
+mechanism itself (forking a project is just copying its directory,
+already possible with no new engine code), but the piece that makes a
+fork (or any in-place asset change) actionable instead of a guess.
+
+**Mechanism:** `_image_references`-style resolution (the existing helper
+that gathers `characters[].reference`/`environment.reference` paths for
+an image generation call) additionally computes each resolved path's
+`sha256` at generation time and records it in that shot's
+`generation.image` record under a new `source_assets` key:
+
+```json
+"generation": {
+  "image": {
+    "status": "completed",
+    "source_assets": [
+      {"path": "assets/characters/mara/reference.png", "sha256": "3f2a..."},
+      {"path": "assets/environments/snow_mountain/reference.png", "sha256": "9b1c..."}
+    ]
+  }
+}
+```
+
+No new version-numbering scheme — a content hash needs no separate
+"current version" pointer to maintain, and this project already
+identifies artifacts by `sha256` (see `shot.json`'s existing
+`artifact.sha256` field), so this reuses an established identity
+convention rather than inventing one.
+
+**`ai-film check-stale --path <project>`** — read-only, walks every shot
+with a completed image generation, recomputes the *current* `sha256` of
+each `source_assets` path, and reports any mismatch:
+
+```
+ai-film check-stale --path <project>
+2 shots reference a changed asset:
+
+S01_SH01
+  assets/characters/mara/reference.png changed since generation
+
+S01_SH03
+  assets/characters/mara/reference.png changed since generation
+```
+
+**Non-goals for this addition**, to keep it proportionate to what it's
+actually for:
+
+- **No automatic regeneration.** `check-stale` only reports — never
+  queues or triggers work itself. Matches this project's standing
+  human-approval-before-spend philosophy; a report is not a command.
+- **No diff of *what* changed about the asset**, just changed-or-not. A
+  boolean signal is what "should I look at this shot again" needs; a
+  full diff view is a speculative feature nothing downstream asks for.
+- **Scoped to `generation.image` only in v1.** That's the stage that
+  directly consumes `characters[]`/`environment` references. Video/voice/
+  sfx/music generation typically build on the already-provenance-tracked
+  storyboard image rather than the raw character reference a second
+  time — extend to those stages later if a real need shows up, not
+  speculatively now.
+
+## Sharing a template (export/import)
+
+A template already lives outside any single project
+(`templates/<id>/`), so "share it with someone else" is almost already
+just "send them that directory" — these two commands exist to make that
+convenient and to validate what's received, not to add a new mechanism:
+
+```
+ai-film export-template --id hero-orbit --output hero-orbit.zip
+ai-film import-template --from hero-orbit.zip [--id <override-id>] [--force]
+```
+
+- `export-template` zips `templates/<id>/` (its `template.json` and
+  `keyframes/`) as-is — no transformation, no metadata stripped or
+  added.
+- `import-template` extracts into `templates/<id>/` (or `--id`'s
+  override, if the recipient wants a different local name) and
+  validates the extracted `template.json` against the same
+  `TEMPLATE_SCHEMA` `save-template` already uses — a corrupted or
+  hand-edited-into-invalidity archive is rejected before it lands, not
+  after. Same `--force`-gated overwrite protection as `save-template`.
+
+**Non-goals**, explicitly, to head off scope creep back toward the
+Production Graph / hosted-sharing ideas this spec's design conversation
+raised and set aside:
+
+- **No hosted registry, gallery, or discovery surface.** This is a file
+  you hand someone, same as email-ing a zip — consistent with the
+  existing Non-Goals row ruling out a cloud/shared template registry.
+- **No bundling of characters, environments, or whole projects in this
+  spec.** Those are a different asset class living inside a project
+  directory, not `templates/`'s project-independent home. The identical
+  export/import *mechanism* would apply to them, but scoping it now
+  would mean designing three asset classes' worth of edge cases instead
+  of one — a natural, small follow-on once this pattern has shipped and
+  proven itself for templates.
+- **The recipient still needs their own working `ai-film-studio` install
+  and their own `FAL_KEY`** to do anything with an imported template
+  beyond inspecting it. This shares a creative recipe, not compute or a
+  hosted environment.
+
 ## Testing
 
 - `save-template` / `list-templates` / `show-template`: standard CLI
@@ -273,6 +379,16 @@ purpose.
   project's test suite does not execute (consistent with how
   `ai-film-director`/`ai-film-storyboard`'s existing brainstorm logic
   isn't unit-tested today either).
+- `check-stale`: a shot with unchanged `source_assets` reports clean; a
+  shot whose recorded hash no longer matches the file on disk is
+  reported stale; a shot with no `source_assets` at all (generated before
+  this feature existed, or never completed image generation) is silently
+  skipped, not reported as an error.
+- `export-template`/`import-template`: round-trip test (export then
+  import into a fresh location reproduces the same `template.json` and
+  keyframe files byte-for-byte); import rejects a zip whose
+  `template.json` fails `TEMPLATE_SCHEMA` validation; `--force`
+  behavior matches `save-template`'s.
 
 ## Open Items For The Plan
 
