@@ -240,6 +240,14 @@ and `FAL_KEY` to generate anything with it. A project opts into a saved template
 hand) — the Director and Storyboard agents then use its `shot_patterns` as optional
 grounding when drafting shots, never overriding an explicit story requirement.
 
+`check-stale [--path <project>]` reports every shot whose generated storyboard
+image was built against a character or environment reference file that has
+since changed — e.g. you re-locked Mara's reference image after already
+generating shots with the old one. Read-only: it only reports, it never
+queues or triggers regeneration. Re-run the normal `generate-image --force`
+(and the candidate loop, if you want to review before committing) on whatever
+it flags.
+
 **Video model selection is configurable per shot feature**, via `config.json`'s
 `providers.video.model_by_feature`, so you don't have to flip the project-wide
 default model back and forth for shots that need a different model's capabilities:

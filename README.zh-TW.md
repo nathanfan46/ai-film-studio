@@ -236,6 +236,12 @@ agent 讀取這份分析，用自己的視覺能力查看關鍵影格，填入�
 加入）——Director 與 Storyboard agent 之後會把它的 `shot_patterns` 當作選填的參考依
 據，但絕不會蓋過故事本身的明確要求。
 
+`check-stale [--path <project>]` 會列出每一個「產生分鏡圖時所用的角色或場景參考檔案，
+之後又被更換」的鏡頭——例如你在已經用舊的參考圖生成過幾個鏡頭之後，重新鎖定了 Mara
+的參考圖。這個指令是唯讀的：只會回報，不會自動排入或觸發重新生成。看到它列出的鏡頭，
+自己視需要重新跑一次 `generate-image --force`（如果想先審核再定案，也可以照常走
+candidate loop）。
+
 **影片模型可以依鏡頭特徵個別設定**，透過 `config.json` 的
 `providers.video.model_by_feature`，這樣你就不用為了某些需要不同模型能力的鏡頭，
 反覆切換整個專案的預設模型：
