@@ -1,4 +1,4 @@
-from ai_film.schema import validate_shot
+from ai_film.schema import validate_shot, TEMPLATE_SCHEMA, validate_template
 
 
 def _valid_shot() -> dict:
@@ -113,3 +113,49 @@ def test_shot_schema_accepts_missing_driving_video_field():
     shot = _valid_shot()
     assert "driving_video" not in shot
     assert validate_shot(shot) == []
+
+
+def _valid_template() -> dict:
+    return {
+        "schema_version": "1.0",
+        "id": "hero-orbit",
+        "name": "Hero Orbit Reveal",
+        "created_at": "2026-09-04T12:00:00Z",
+        "source_note": "Reference clip of a hero introduction",
+        "shot_patterns": [
+            {
+                "order": 0,
+                "pattern_name": "establish",
+                "camera": "wide shot, static",
+                "subject_motion": "N/A",
+                "framing": "wide, subject not yet visible",
+                "suggested_duration_seconds": 3,
+                "reference_keyframe": None,
+            }
+        ],
+    }
+
+
+def test_validate_template_accepts_valid_template():
+    assert validate_template(_valid_template()) == []
+
+
+def test_validate_template_rejects_missing_shot_patterns():
+    template = _valid_template()
+    del template["shot_patterns"]
+    errors = validate_template(template)
+    assert any("shot_patterns" in e for e in errors)
+
+
+def test_validate_template_rejects_shot_pattern_missing_camera():
+    template = _valid_template()
+    del template["shot_patterns"][0]["camera"]
+    errors = validate_template(template)
+    assert any("camera" in e for e in errors)
+
+
+def test_validate_template_allows_null_reference_keyframe_and_duration():
+    template = _valid_template()
+    template["shot_patterns"][0]["reference_keyframe"] = None
+    template["shot_patterns"][0]["suggested_duration_seconds"] = None
+    assert validate_template(template) == []

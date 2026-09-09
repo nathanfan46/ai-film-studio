@@ -90,3 +90,43 @@ def validate_shot(data: dict) -> list[str]:
     return [
         f"{'.'.join(str(p) for p in e.path) or '<root>'}: {e.message}" for e in errors
     ]
+
+
+SHOT_PATTERN_SCHEMA = {
+    "type": "object",
+    "required": [
+        "order", "pattern_name", "camera", "subject_motion", "framing",
+        "suggested_duration_seconds", "reference_keyframe",
+    ],
+    "properties": {
+        "order": {"type": "integer"},
+        "pattern_name": {"type": "string"},
+        "camera": {"type": "string"},
+        "subject_motion": {"type": "string"},
+        "framing": {"type": "string"},
+        "suggested_duration_seconds": {"type": ["number", "null"]},
+        "reference_keyframe": {"type": ["string", "null"]},
+    },
+}
+
+TEMPLATE_SCHEMA = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "required": ["schema_version", "id", "name", "shot_patterns"],
+    "properties": {
+        "schema_version": {"type": "string"},
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "created_at": {"type": ["string", "null"]},
+        "source_note": {"type": ["string", "null"]},
+        "shot_patterns": {"type": "array", "items": SHOT_PATTERN_SCHEMA},
+    },
+}
+
+
+def validate_template(data: dict) -> list[str]:
+    validator = jsonschema.Draft7Validator(TEMPLATE_SCHEMA)
+    errors = sorted(validator.iter_errors(data), key=lambda e: list(e.path))
+    return [
+        f"{'.'.join(str(p) for p in e.path) or '<root>'}: {e.message}" for e in errors
+    ]
