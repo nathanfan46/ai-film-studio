@@ -6,16 +6,31 @@ docs/superpowers/specs/2026-09-04-template-library-design.md."""
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import zipfile
 from pathlib import Path
 
 from ai_film.schema import validate_template
 
+_TEMPLATE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def _validate_template_id(template_id: str) -> None:
+    if (
+        "/" in template_id
+        or "\\" in template_id
+        or ".." in template_id
+        or not _TEMPLATE_ID_PATTERN.match(template_id)
+    ):
+        raise ValueError(f"invalid template id: {template_id!r}")
+
 
 def save_template(
     from_path: Path, template_id: str, templates_dir: Path, force: bool = False
 ) -> dict:
+    _validate_template_id(template_id)
+
     if not from_path.exists():
         raise ValueError(f"draft file not found: {from_path}")
 
@@ -25,9 +40,21 @@ def save_template(
         raise ValueError(f"draft failed schema validation: {'; '.join(errors)}")
 
     target_dir = templates_dir / template_id
+    if target_dir.exists() and not force:
+        raise RuntimeError(f"{target_dir} already exists — pass --force to overwrite")
+
+    # Validate every referenced keyframe exists before touching the target
+    # directory, so a --force save with a bad keyframe path doesn't destroy
+    # the previously-saved template.
+    for pattern in draft.get("shot_patterns", []):
+        keyframe = pattern.get("reference_keyframe")
+        if not keyframe:
+            continue
+        source_keyframe = from_path.parent / keyframe
+        if not source_keyframe.exists():
+            raise ValueError(f"reference_keyframe not found: {source_keyframe}")
+
     if target_dir.exists():
-        if not force:
-            raise RuntimeError(f"{target_dir} already exists — pass --force to overwrite")
         shutil.rmtree(target_dir)
     target_dir.mkdir(parents=True)
 
@@ -37,8 +64,6 @@ def save_template(
         if not keyframe:
             continue
         source_keyframe = from_path.parent / keyframe
-        if not source_keyframe.exists():
-            raise ValueError(f"reference_keyframe not found: {source_keyframe}")
         keyframes_dir.mkdir(parents=True, exist_ok=True)
         dest = keyframes_dir / Path(keyframe).name
         shutil.copyfile(source_keyframe, dest)
@@ -57,7 +82,10 @@ def list_templates(templates_dir: Path) -> list[dict]:
         template_path = template_dir / "template.json"
         if not template_path.exists():
             continue
-        data = json.loads(template_path.read_text())
+        try:
+            data = json.loads(template_path.read_text())
+        except json.JSONDecodeError:
+            continue
         results.append({
             "id": data.get("id", template_dir.name),
             "name": data.get("name", ""),
@@ -93,7 +121,12 @@ def import_template(
     if not from_path.exists():
         raise ValueError(f"archive not found: {from_path}")
 
-    with zipfile.ZipFile(from_path) as zf:
+    try:
+        zf_context = zipfile.ZipFile(from_path)
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f"{from_path} is not a valid zip archive") from exc
+
+    with zf_context as zf:
         names = zf.namelist()
         if "template.json" not in names:
             raise ValueError(f"{from_path} does not contain a template.json")
@@ -105,6 +138,7 @@ def import_template(
         resolved_id = template_id or draft.get("id")
         if not resolved_id:
             raise ValueError("no --id given and template.json has no id field")
+        _validate_template_id(resolved_id)
 
         target_dir = templates_dir / resolved_id
         if target_dir.exists():

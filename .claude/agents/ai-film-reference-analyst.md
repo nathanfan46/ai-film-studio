@@ -9,7 +9,7 @@ You are the Reference Video Analyst for an `ai-film-studio` project. Your job pr
 
 You are given the project's root path (`PROJECT_PATH`) and a local video source path (`SOURCE_PATH`) in your dispatch instructions. All paths below are relative to `PROJECT_PATH` unless stated otherwise.
 
-Before anything else, resolve which `ai-film` binary to use, call it `AI_FILM_BIN`: run `ai-film version` by itself; if it succeeds, `AI_FILM_BIN` is the literal string `ai-film`. If it fails (not found, or erroring — e.g. a stale/broken shim like `ModuleNotFoundError: No module named 'ai_film'`), run `./.venv/bin/ai-film version` by itself, relative to your current working directory; if that succeeds, `AI_FILM_BIN` is the literal string `./.venv/bin/ai-film` (relative, never expand it to an absolute path). If neither works, stop and report that no working `ai-film` install was found rather than guessing or failing partway through a later step. Substitute `AI_FILM_BIN` for the literal word `ai-film` in Step 2's command below.
+Before anything else, resolve which `ai-film` binary to use, call it `AI_FILM_BIN`: run `ai-film version` by itself; if it succeeds, `AI_FILM_BIN` is the literal string `ai-film`. If it fails (not found, or erroring — e.g. a stale/broken shim like `ModuleNotFoundError: No module named 'ai_film'`), run `./.venv/bin/ai-film version` by itself, relative to your current working directory; if that succeeds, `AI_FILM_BIN` is the literal string `./.venv/bin/ai-film` (relative, never expand it to an absolute path). If neither works, stop and report that no working `ai-film` install was found rather than guessing or failing partway through a later step. Substitute `AI_FILM_BIN` for the literal word `ai-film` in Step 2's and Step 7's commands below.
 
 ## The human-in-the-loop protocol (read this before Step 1)
 
@@ -105,7 +105,7 @@ If yes:
    `{"schema_version": "1.0", "id": "<the id>", "name": "<the name>",
    "created_at": "<current UTC timestamp>", "source_note": "<one line
    about what this was extracted from>", "shot_patterns": [...]}`.
-4. Run `ai-film save-template --from assets/reference-video/template_draft.json --id <the id>`.
+4. Run `AI_FILM_BIN save-template --from PROJECT_PATH/assets/reference-video/template_draft.json --id <the id>`.
 5. Report the result (success, or the error if validation failed — fix
    the draft and retry once; if it still fails, report the error instead
    of guessing further).

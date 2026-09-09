@@ -222,3 +222,101 @@ def test_import_template_refuses_existing_without_force(tmp_path: Path):
 
     with pytest.raises(RuntimeError, match="already exists"):
         import_template(archive_path, templates_dir)
+
+
+# --- Finding 1: path traversal via a malicious/careless template id ---
+
+
+def test_save_template_rejects_path_traversal_template_id(tmp_path: Path):
+    draft_path = tmp_path / "draft.json"
+    _write_draft(draft_path, _draft())
+    templates_dir = tmp_path / "templates"
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("do not delete me")
+
+    with pytest.raises(ValueError, match="invalid template id"):
+        save_template(draft_path, "../victim", templates_dir, force=True)
+
+    assert (victim / "keep.txt").exists()
+    assert not templates_dir.exists()
+
+
+def test_import_template_rejects_path_traversal_id_from_archive(tmp_path: Path):
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("do not delete me")
+
+    templates_dir = tmp_path / "templates"
+    malicious = _draft(id="../victim")
+    archive_path = tmp_path / "malicious.zip"
+    with zipfile.ZipFile(archive_path, "w") as zf:
+        zf.writestr("template.json", json.dumps(malicious))
+
+    with pytest.raises(ValueError):
+        import_template(archive_path, templates_dir, force=True)
+
+    assert (victim / "keep.txt").exists()
+    assert not templates_dir.exists()
+
+
+def test_import_template_rejects_path_traversal_id_override(tmp_path: Path):
+    draft_path = tmp_path / "draft.json"
+    _write_draft(draft_path, _draft())
+    templates_dir = tmp_path / "templates"
+    save_template(draft_path, "hero-orbit", templates_dir)
+    archive_path = tmp_path / "hero-orbit.zip"
+    export_template("hero-orbit", templates_dir, archive_path)
+
+    with pytest.raises(ValueError, match="invalid template id"):
+        import_template(archive_path, templates_dir, template_id="../victim2")
+
+
+# --- Finding 5: --force must not destroy the old template before keyframes
+# referenced by the new draft are confirmed to exist ---
+
+
+def test_save_template_force_with_missing_keyframe_preserves_existing_template(tmp_path: Path):
+    draft_path = tmp_path / "draft.json"
+    _write_draft(draft_path, _draft())
+    templates_dir = tmp_path / "templates"
+    save_template(draft_path, "hero-orbit", templates_dir)
+    original_content = (templates_dir / "hero-orbit" / "template.json").read_text()
+
+    bad_draft = _draft()
+    bad_draft["shot_patterns"][0]["reference_keyframe"] = "does_not_exist.jpg"
+    bad_draft_path = tmp_path / "bad_draft.json"
+    _write_draft(bad_draft_path, bad_draft)
+
+    with pytest.raises(ValueError, match="reference_keyframe"):
+        save_template(bad_draft_path, "hero-orbit", templates_dir, force=True)
+
+    assert (templates_dir / "hero-orbit" / "template.json").exists()
+    assert (templates_dir / "hero-orbit" / "template.json").read_text() == original_content
+
+
+# --- Finding 6: corrupt archives and corrupt JSON produce clean errors
+# instead of crashing ---
+
+
+def test_import_template_rejects_non_zip_archive(tmp_path: Path):
+    bad_archive = tmp_path / "not-a-zip.zip"
+    bad_archive.write_bytes(b"this is not a zip file")
+
+    with pytest.raises(ValueError, match="not a valid zip archive"):
+        import_template(bad_archive, tmp_path / "templates")
+
+
+def test_list_templates_skips_corrupt_json_but_keeps_valid_entries(tmp_path: Path):
+    draft_path = tmp_path / "draft.json"
+    _write_draft(draft_path, _draft())
+    templates_dir = tmp_path / "templates"
+    save_template(draft_path, "hero-orbit", templates_dir)
+
+    corrupt_dir = templates_dir / "corrupt-template"
+    corrupt_dir.mkdir()
+    (corrupt_dir / "template.json").write_text("{not valid json")
+
+    results = list_templates(templates_dir)
+
+    assert results == [{"id": "hero-orbit", "name": "Hero Orbit Reveal", "shot_pattern_count": 1}]

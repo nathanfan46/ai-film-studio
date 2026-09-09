@@ -115,7 +115,7 @@ TEMPLATE_SCHEMA = {
     "required": ["schema_version", "id", "name", "shot_patterns"],
     "properties": {
         "schema_version": {"type": "string"},
-        "id": {"type": "string"},
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
         "name": {"type": "string"},
         "created_at": {"type": ["string", "null"]},
         "source_note": {"type": ["string", "null"]},
