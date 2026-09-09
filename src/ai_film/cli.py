@@ -42,6 +42,11 @@ from ai_film.video_fix import mux_audio_track as mux_audio_track_service
 from ai_film.video_diagnostics import diagnose_video as diagnose_video_service
 from ai_film.video_diagnostics import extract_last_frame
 from ai_film.reference_analysis import analyze_reference_video as analyze_reference_video_service
+from ai_film.template_store import (
+    list_templates as list_templates_service,
+    save_template as save_template_service,
+    show_template as show_template_service,
+)
 from ai_film.scene_continuity import (
     add_continuity_transition as add_continuity_transition_service,
     effective_spatial_state,
@@ -76,6 +81,7 @@ _load_env_file()
 app = typer.Typer(name="ai-film", help="AI Film Studio production engine.")
 
 DEFAULT_PROJECT_PATH = Path("project")
+DEFAULT_TEMPLATES_PATH = Path("templates")
 
 
 @app.command()
@@ -935,6 +941,52 @@ def analyze_reference_video_cmd(
         raise typer.Exit(code=1)
     brief_path = path / "assets" / "reference-video" / "video_analysis_brief.json"
     typer.echo(f"analyzed {source.name}: {len(brief['scenes'])} scene(s) -> {brief_path}")
+
+
+@app.command(name="save-template")
+def save_template_cmd(
+    from_: Path = typer.Option(..., "--from"),
+    id: str = typer.Option(..., "--id"),
+    templates_dir: Path = typer.Option(DEFAULT_TEMPLATES_PATH, "--templates-dir"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Validate a draft template JSON and save it to templates/<id>/,
+    copying any referenced keyframe images alongside it."""
+    try:
+        save_template_service(from_, id, templates_dir, force=force)
+    except (ValueError, RuntimeError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"saved template {id} -> {templates_dir / id / 'template.json'}")
+
+
+@app.command(name="list-templates")
+def list_templates_cmd(
+    templates_dir: Path = typer.Option(DEFAULT_TEMPLATES_PATH, "--templates-dir"),
+) -> None:
+    """List every saved template with its name and shot-pattern count."""
+    templates = list_templates_service(templates_dir)
+    if not templates:
+        typer.echo("no templates found")
+        return
+    for template in templates:
+        typer.echo(
+            f"{template['id']:<20} {template['name']:<30} ({template['shot_pattern_count']} shot patterns)"
+        )
+
+
+@app.command(name="show-template")
+def show_template_cmd(
+    id: str = typer.Option(..., "--id"),
+    templates_dir: Path = typer.Option(DEFAULT_TEMPLATES_PATH, "--templates-dir"),
+) -> None:
+    """Print a saved template's full JSON content."""
+    try:
+        template = show_template_service(id, templates_dir)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(json.dumps(template, indent=2, ensure_ascii=False))
 
 
 @app.command(name="review-media")
