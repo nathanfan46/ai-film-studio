@@ -191,7 +191,7 @@ command set: `init`, `models`, `status`, `validate`, `generate-image`, `generate
 `generate-voice`, `generate-lipsync`, `generate-sfx`, `generate-music`, `generate-all`,
 `check-continuity`, `approve-generation`, `render`, `generate-candidates`, `review`,
 `select-candidate`, `edit-candidate`, `add-feedback`, `resolve-feedback`,
-`apply-audio-offset`, `review-media`.
+`apply-audio-offset`, `review-media`, `overview`.
 
 `generate-lipsync` runs an audio-driven lip-sync pass over a shot's already-generated
 video and voice, superseding the video artifact with the synced result (same
@@ -331,6 +331,22 @@ ai-film apply-audio-offset --shot S01_SH01 --track voice --offset-ms 400 --path 
 ai-film review-media --shot S01_SH01 --path ~/my-film
 ```
 
+## Whole-project status at a glance
+
+```bash
+ai-film overview --path ~/my-film
+```
+
+Builds (or rebuilds) `07_review/overview.html` and opens it — every shot,
+grouped by scene, with its storyboard thumbnail (shown whenever the artifact
+file is actually on disk, regardless of what the image stage's status field
+says — a file that exists is a more reliable signal than metadata), camera
+framing, cast, per-stage generation status, a `STALE` badge for anything
+`check-stale` would flag, and a link into that shot's `review-media` page if
+one has been built yet (never a broken link — a shot with no review page
+yet just shows plain text instead). Purely a read-only snapshot: it never
+triggers generation, and it's safe to rebuild at any point in production.
+
 ## Project layout
 
 `ai-film init` scaffolds:
@@ -347,7 +363,8 @@ assets/                     # reference images (characters, environments, props,
   candidates/<shot_id>/candidates/  # candidate images for that shot's storyboard, pre-selection — note the doubled "candidates/" (target_dir already includes one level; candidate generation adds its own subdirectory on top)
 05_video/                     # generated video clips
 06_audio/{dialogue,sfx,music}/
-07_review/                    # static per-shot review pages (<shot_id>.html) built by `review-media`, plus generated waveform PNGs
+07_review/                    # static per-shot review pages (<shot_id>.html) built by `review-media`, plus generated
+                              #   waveform PNGs, plus overview.html (whole-project status) built by `overview`
 final/                        # rendered reel_001.mp4 lands here
 99_logs/                      # per-shot generation attempt logs + approval records
 ```

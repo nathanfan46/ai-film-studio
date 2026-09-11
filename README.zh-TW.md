@@ -192,7 +192,7 @@ ai-film models --capability video
 `generate-voice`、`generate-lipsync`、`generate-sfx`、`generate-music`、
 `generate-all`、`check-continuity`、`approve-generation`、`render`、
 `generate-candidates`、`review`、`select-candidate`、`edit-candidate`、
-`add-feedback`、`resolve-feedback`、`apply-audio-offset`、`review-media`。
+`add-feedback`、`resolve-feedback`、`apply-audio-offset`、`review-media`、`overview`。
 
 `generate-lipsync` 會對一個鏡頭已生成的影片與語音執行一次音訊驅動的對嘴（lip-sync）
 處理，並用同步後的結果取代原本的影片 artifact（沿用跟其他任何影片重新生成一樣的
@@ -317,6 +317,20 @@ ai-film apply-audio-offset --shot S01_SH01 --track voice --offset-ms 400 --path 
 ai-film review-media --shot S01_SH01 --path ~/my-film
 ```
 
+## 一眼看懂整部片的製作狀況
+
+```bash
+ai-film overview --path ~/my-film
+```
+
+建立（或重建）`07_review/overview.html` 並開啟——依場景分組列出每個鏡頭，包含
+分鏡縮圖（只要那張圖檔實際存在於硬碟上就會顯示，不管 image stage 的 status
+欄位寫的是什麼——檔案是否存在是比 metadata 更可靠的顯示依據）、攝影機構圖、
+出場角色、各階段（image/video/voice/sfx/music）的生成狀態、`check-stale` 會標記
+出來的 `STALE` 徽章，以及一個連到該鏡頭 `review-media` 頁面的連結（前提是那個
+頁面已經建立過——絕不會產生失效連結，還沒有審閱頁的鏡頭只會顯示一段純文字）。
+純粹是唯讀的快照——不會觸發任何生成動作，在製作過程中任何時候重新產生都是安全的。
+
 ## 專案目錄結構
 
 `ai-film init` 會建立以下結構：
@@ -333,7 +347,8 @@ assets/                     # 參考圖（角色、場景、道具、字型）
   candidates/<shot_id>/candidates/  # 該鏡頭分鏡圖選定前的候選圖——注意這裡的 "candidates/" 出現兩次（target_dir 本身已經包含一層，候選圖生成時又會在上面再加一層子目錄）
 05_video/                     # 生成的影片片段
 06_audio/{dialogue,sfx,music}/
-07_review/                    # 由 `review-media` 建立的靜態單鏡頭審閱頁（<shot_id>.html），以及生成的波形 PNG
+07_review/                    # 由 `review-media` 建立的靜態單鏡頭審閱頁（<shot_id>.html）、生成的波形 PNG，
+                              #   以及由 `overview` 建立的全片狀態總覽 overview.html
 final/                        # 渲染完成的 reel_001.mp4 會放在這裡
 99_logs/                      # 每個鏡頭的生成嘗試記錄與核准紀錄
 ```

@@ -64,6 +64,7 @@ from ai_film.feedback_store import (
     resolve_feedback_entry as resolve_feedback_entry_service,
 )
 from ai_film.media_review import build_media_review
+from ai_film.production_overview import build_production_overview
 from ai_film.shot_store import (
     list_shot_paths,
     load_shot,
@@ -1057,6 +1058,17 @@ def review_media_cmd(
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
+    open_in_browser(html_path)
+    typer.echo(f"opened {html_path}")
+
+
+@app.command(name="overview")
+def overview_cmd(path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path")) -> None:
+    """Build (or rebuild) the whole-project production overview and open it —
+    every shot, grouped by scene, with its storyboard thumbnail, camera,
+    cast, per-stage generation status, staleness, and a link into its
+    per-shot review page if one exists yet."""
+    html_path = build_production_overview(path)
     open_in_browser(html_path)
     typer.echo(f"opened {html_path}")
 
