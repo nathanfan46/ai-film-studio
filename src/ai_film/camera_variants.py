@@ -32,8 +32,12 @@ def resolve_camera_variants(
     variants = [original] if original else []
     remaining_pool = [label for label in distinct_pool if label != original]
 
-    if not remaining_pool:
-        remaining_pool = distinct_pool
+    if len(variants) < count and not remaining_pool:
+        raise ValueError(
+            "no distinct camera variants available beyond the shot's original "
+            f"camera.shot (original={original!r}, override={override!r}) — "
+            "widen the --cameras override or drop --cameras to use the default pool"
+        )
 
     i = 0
     while len(variants) < count:

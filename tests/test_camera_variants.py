@@ -1,3 +1,5 @@
+import pytest
+
 from ai_film.camera_variants import DEFAULT_CAMERA_VARIANTS, resolve_camera_variants
 
 
@@ -53,4 +55,25 @@ def test_cycles_through_pool_without_original():
 
 def test_single_count_returns_only_original():
     result = resolve_camera_variants("medium", count=1, override=None)
+    assert result == ["medium"]
+
+
+def test_override_collapsing_entirely_into_original_raises_instead_of_duplicating():
+    """An override pool that (after dedup) contains nothing but the shot's own
+    original camera.shot must never silently reintroduce that original as a
+    'variant' — that's exactly the same-framing-N-times behavior this feature
+    replaces. A clear error beats a silent duplicate."""
+    with pytest.raises(ValueError, match="no distinct camera variant"):
+        resolve_camera_variants("medium", count=3, override=["medium"])
+
+
+def test_empty_override_list_raises_a_clear_error_not_a_crash():
+    with pytest.raises(ValueError, match="no distinct camera variant"):
+        resolve_camera_variants(None, count=3, override=[])
+
+
+def test_override_collapsing_into_original_with_count_one_still_returns_original():
+    """count=1 never needs to draw from the (empty) remaining pool at all, so
+    this must succeed even though the override fully collapses into original."""
+    result = resolve_camera_variants("medium", count=1, override=["medium"])
     assert result == ["medium"]

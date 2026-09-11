@@ -1207,6 +1207,9 @@ def generate_candidates_cmd(
         if cameras is not None:
             typer.echo("--cameras only applies to shot: targets", err=True)
             raise typer.Exit(code=1)
+    elif prompt is not None and cameras is not None:
+        typer.echo("--cameras has no effect together with an explicit --prompt", err=True)
+        raise typer.Exit(code=1)
 
     references: list[str] = []
     shot_data: dict | None = None

@@ -210,6 +210,30 @@ def test_generate_candidates_explicit_prompt_disables_camera_variants(tmp_path: 
     assert sent_request.prompt == "a custom hand-written prompt"
 
 
+def test_generate_candidates_cameras_flag_rejected_with_explicit_prompt_for_shot_target(
+    tmp_path: Path,
+):
+    """--prompt disables camera-variant mode entirely, so --cameras alongside it
+    would silently do nothing — reject the combination instead, for the same
+    reason character:/env: targets reject --cameras outright."""
+    project_dir = _init_mock_project(tmp_path)
+    _save_shot_with_camera(project_dir, {"shot": "medium"})
+    runner.invoke(
+        app,
+        ["approve-generation", "--scope", "storyboard", "--targets", "shot:S01_SH01:image",
+         "--path", str(project_dir)],
+    )
+
+    result = runner.invoke(
+        app,
+        ["generate-candidates", "--target", "shot:S01_SH01:image", "--count", "2",
+         "--prompt", "a custom prompt", "--cameras", "wide,medium", "--path", str(project_dir)],
+    )
+
+    assert result.exit_code == 1
+    assert "--cameras" in result.output
+
+
 def test_generate_candidates_cameras_flag_rejected_for_character_target(tmp_path: Path):
     project_dir = _init_mock_project(tmp_path)
     _approve_bibles(project_dir)
