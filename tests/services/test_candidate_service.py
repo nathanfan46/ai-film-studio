@@ -318,6 +318,98 @@ def test_select_candidate_skips_missing_character_or_environment_reference(tmp_p
     assert updated_shot["generation"]["image"]["source_assets"] == []
 
 
+def test_select_candidate_records_previous_shot_reference_as_source_asset(tmp_path: Path):
+    """The common case per ai-film-storyboard.md's documented workflow:
+    shot 2+ in a scene chains from the previous shot's locked image via
+    the exact same _image_references resolution generate-candidates
+    itself uses — source_assets must include it too, or check-stale
+    misses most shots in a scene, not just a rare one."""
+    from ai_film.services.generation_service import sha256_of_file
+
+    shot1_image = tmp_path / "04_storyboard" / "S01_SH01.png"
+    shot1_image.parent.mkdir(parents=True)
+    shot1_image.write_bytes(b"SHOT-01-IMAGE")
+    shot1 = {
+        "schema_version": "1.0", "id": "S01_SH01", "status": "draft", "duration_seconds": 3,
+        "continuity": {"status": "pending", "checked_at": None, "issues": []},
+        "generation": {
+            "image": {
+                "status": "completed",
+                "artifact": {"path": "04_storyboard/S01_SH01.png", "size_bytes": 1, "sha256": None},
+            },
+            "video": {"status": "pending", "attempts": 0},
+            "voice": {"status": "not_required"}, "sfx": {"status": "not_required"},
+            "music": {"status": "not_required"},
+        },
+    }
+    save_shot(tmp_path / "03_shots" / "S01_SH01.json", shot1)
+
+    shot2 = {
+        "schema_version": "1.0", "id": "S01_SH02", "status": "draft", "duration_seconds": 3,
+        "continuity": {"status": "pending", "checked_at": None, "issues": []},
+        "generation": {
+            "image": {"status": "pending", "attempts": 0},
+            "video": {"status": "pending", "attempts": 0},
+            "voice": {"status": "not_required"}, "sfx": {"status": "not_required"},
+            "music": {"status": "not_required"},
+        },
+    }
+    save_shot(tmp_path / "03_shots" / "S01_SH02.json", shot2)
+    directory = tmp_path / "04_storyboard" / "candidates" / "S01_SH02" / "candidates"
+    directory.mkdir(parents=True)
+    (directory / "001.png").write_bytes(b"SHOT-02-CANDIDATE")
+    add_candidates(tmp_path, "shot:S01_SH02:image", [{
+        "id": "001", "path": "candidates/001.png", "provider": "mock", "model": "nano-banana",
+        "prompt": "medium shot", "parent": None, "operation": "generate", "job": None,
+        "estimated_cost": None, "created_at": "2026-09-10T00:00:00Z",
+    }])
+
+    select_candidate(tmp_path, "shot:S01_SH02:image", "001")
+
+    shot2_updated = load_shot(tmp_path / "03_shots" / "S01_SH02.json")
+    source_assets = shot2_updated["generation"]["image"]["source_assets"]
+    assert {a["path"] for a in source_assets} == {"04_storyboard/S01_SH01.png"}
+    assert source_assets[0]["sha256"] == sha256_of_file(shot1_image)
+
+
+def test_select_candidate_records_continuity_master_reference_as_source_asset(tmp_path: Path):
+    from ai_film.scene_continuity import save_continuity
+
+    master_image = tmp_path / "04_storyboard" / "S01_SH01.png"
+    master_image.parent.mkdir(parents=True)
+    master_image.write_bytes(b"MASTER-IMAGE")
+    save_continuity(tmp_path, "S01", {
+        "scene_id": "S01", "master_shot": "S01_SH01",
+        "master_reference_image": "04_storyboard/S01_SH01.png", "spatial": {}, "transitions": [],
+    })
+
+    shot2 = {
+        "schema_version": "1.0", "id": "S01_SH02", "status": "draft", "duration_seconds": 3,
+        "continuity": {"status": "pending", "checked_at": None, "issues": []},
+        "generation": {
+            "image": {"status": "pending", "attempts": 0},
+            "video": {"status": "pending", "attempts": 0},
+            "voice": {"status": "not_required"}, "sfx": {"status": "not_required"},
+            "music": {"status": "not_required"},
+        },
+    }
+    save_shot(tmp_path / "03_shots" / "S01_SH02.json", shot2)
+    directory = tmp_path / "04_storyboard" / "candidates" / "S01_SH02" / "candidates"
+    directory.mkdir(parents=True)
+    (directory / "001.png").write_bytes(b"SHOT-02-CANDIDATE")
+    add_candidates(tmp_path, "shot:S01_SH02:image", [{
+        "id": "001", "path": "candidates/001.png", "provider": "mock", "model": "nano-banana",
+        "prompt": "medium shot", "parent": None, "operation": "generate", "job": None,
+        "estimated_cost": None, "created_at": "2026-09-10T00:00:00Z",
+    }])
+
+    select_candidate(tmp_path, "shot:S01_SH02:image", "001")
+
+    shot2_updated = load_shot(tmp_path / "03_shots" / "S01_SH02.json")
+    source_assets = shot2_updated["generation"]["image"]["source_assets"]
+    assert {a["path"] for a in source_assets} == {"04_storyboard/S01_SH01.png"}
+
+
 def test_edit_candidate_blocked_without_approval(tmp_path: Path):
     _init_config(tmp_path)
     _seed_character_candidate(tmp_path)

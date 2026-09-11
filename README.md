@@ -241,17 +241,16 @@ hand) — the Director and Storyboard agents then use its `shot_patterns` as opt
 grounding when drafting shots, never overriding an explicit story requirement.
 
 `check-stale [--path <project>]` reports every shot whose generated storyboard
-image was built against a character or environment reference file that has
-since changed — e.g. you re-locked Mara's reference image after already
-generating shots with the old one. Tracks shots imaged either way: directly
-via `generate-image`/`generate-all --stage image`, or locked through the
-normal candidate loop (`generate-candidates`/`select-candidate`). A shot
-imaged via `generate-image` can also be flagged stale for a couple of other
-tracked references — an earlier shot's storyboard or the scene's continuity
-reference — that a candidate-locked shot doesn't check, since a candidate set
-is typically a shot's first image and that continuity cascade rarely applies
-yet. Read-only: it only reports, it never queues or triggers regeneration.
-Re-run the normal `generate-image --force` (and the candidate loop, if you
+image was built against a reference file that has since changed — e.g. you
+re-locked Mara's reference image after already generating shots with the old
+one. Tracks shots imaged either way: directly via `generate-image`/
+`generate-all --stage image`, or locked through the normal candidate loop
+(`generate-candidates`/`select-candidate`) — both paths resolve the same
+references (character/environment images, the previous shot's locked image,
+and the scene's continuity-master reference), so a shot can be flagged stale
+for any of them changing, not just its own character/environment art. Read-only:
+it only reports, it never queues or triggers regeneration. Re-run the normal
+`generate-image --force` (and the candidate loop, if you
 want to review before committing) on whatever it flags.
 
 **Video model selection is configurable per shot feature**, via `config.json`'s

@@ -149,11 +149,13 @@ def validate_cmd(path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path")) -> N
 
 @app.command(name="check-stale")
 def check_stale_cmd(path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path")) -> None:
-    """Report shots whose generated image was built against a character or
-    environment reference that has since changed. Tracks shots imaged via
-    generate-image/generate-all --stage image and shots locked via the
-    candidate loop (generate-candidates/select-candidate). Read-only —
-    never triggers regeneration itself."""
+    """Report shots whose generated image was built against a reference
+    that has since changed (character/environment art, the previous
+    shot's locked image, or the scene's continuity master). Tracks shots
+    imaged via generate-image/generate-all --stage image and shots
+    locked via the candidate loop (generate-candidates/select-candidate)
+    equally — both resolve the same references. Read-only — never
+    triggers regeneration itself."""
     stale = check_stale_service(path)
     if not stale:
         typer.echo("no stale shots")
