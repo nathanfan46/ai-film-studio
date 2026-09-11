@@ -238,10 +238,11 @@ agent 讀取這份分析，用自己的視覺能力查看關鍵影格，填入�
 
 `check-stale [--path <project>]` 會列出每一個「產生分鏡圖時所用的角色或場景參考檔案，
 之後又被更換」的鏡頭——例如你在已經用舊的參考圖生成過幾個鏡頭之後，重新鎖定了 Mara
-的參考圖。目前只追蹤透過 `generate-image`（或 `generate-all --stage image`）生成的鏡頭——透過
-candidate loop（`generate-candidates`/`select-candidate`）鎖定的鏡頭目前還無法追蹤，即使它們的
-參考檔案改變了也不會被標記。被追蹤的參考檔案可能不只是角色或場景圖片——如果較早鏡頭的分鏡圖或
-該場景的連戲參考檔案改變了，該鏡頭也會被標記為陳舊。這個指令是唯讀的：只會回報，不會自動排入或
+的參考圖。不論鏡頭是透過 `generate-image`（或 `generate-all --stage image`）直接生成，
+還是透過一般的 candidate loop（`generate-candidates`/`select-candidate`）鎖定，都會被追蹤。
+透過 `generate-image` 生成的鏡頭，還會多追蹤幾種參考——較早鏡頭的分鏡圖、該場景的連戲參考
+檔案——candidate loop 鎖定的鏡頭則不會檢查這些，因為 candidate set 通常是一個鏡頭的第一張
+圖，這個連戲鏈很少適用。這個指令是唯讀的：只會回報，不會自動排入或
 觸發重新生成。看到它列出的鏡頭，自己視需要重新跑一次 `generate-image --force`（如果想先審核再定案，
 也可以照常走 candidate loop）。
 

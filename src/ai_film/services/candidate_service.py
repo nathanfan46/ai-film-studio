@@ -19,12 +19,37 @@ from ai_film.errors import CostGateError
 from ai_film.jobs import run_job
 from ai_film.logging_store import write_attempt_log
 from ai_film.models import GenerationJob, ImageEditRequest, ImageGenerationRequest
-from ai_film.services.generation_service import project_relative_path
+from ai_film.services.generation_service import project_relative_path, sha256_of_file
 from ai_film.shot_store import load_shot, save_shot
 
 
 def _log_group(target: str) -> str:
     return target.replace(":", "_")
+
+
+def _source_assets_for_shot(project_dir: Path, shot: dict) -> list[dict]:
+    """Character/environment reference paths this shot is currently
+    configured to use, hashed the same way generate_image records them —
+    so a candidate-locked shot is tracked by check-stale too, not just a
+    shot imaged via generate-image. Deliberately narrower than
+    generate_image's own reference resolution (no continuity-master or
+    previous-shot cascade): a candidate set is typically the *first*
+    image for a shot, so that cascade rarely applies here, and this
+    keeps the fix scoped to what asset-staleness tracking actually
+    needs — character/environment reference changes."""
+    paths = [
+        project_dir / c["reference"]
+        for c in shot.get("characters", [])
+        if c.get("reference")
+    ]
+    environment_reference = shot.get("environment", {}).get("reference")
+    if environment_reference:
+        paths.append(project_dir / environment_reference)
+    return [
+        {"path": project_relative_path(str(p), project_dir), "sha256": sha256_of_file(p)}
+        for p in paths
+        if p.exists()
+    ]
 
 
 def generate_candidates(
@@ -137,6 +162,7 @@ def select_candidate(project_dir: Path, target: str, candidate_id: str) -> dict:
                 "size_bytes": dest_path.stat().st_size,
                 "sha256": None,
             },
+            "source_assets": _source_assets_for_shot(project_dir, shot),
         }
         save_shot(shot_path, shot)
 

@@ -257,6 +257,67 @@ def test_select_candidate_writes_into_shot_json_for_shot_target(tmp_path: Path):
     assert shot["generation"]["image"]["artifact"]["path"] == "04_storyboard/S01_SH01.png"
 
 
+def test_select_candidate_records_source_assets_for_shot_target(tmp_path: Path):
+    from ai_film.services.generation_service import sha256_of_file
+
+    reference = tmp_path / "assets" / "characters" / "mara" / "reference.png"
+    reference.parent.mkdir(parents=True)
+    reference.write_bytes(b"MARA-REFERENCE")
+    env_reference = tmp_path / "assets" / "environments" / "snow_mountain" / "reference.png"
+    env_reference.parent.mkdir(parents=True)
+    env_reference.write_bytes(b"SNOW-MOUNTAIN-REFERENCE")
+
+    shot = {
+        "schema_version": "1.0", "id": "S01_SH01", "status": "draft", "duration_seconds": 3,
+        "continuity": {"status": "pending", "checked_at": None, "issues": []},
+        "characters": [{"name": "Mara", "reference": "assets/characters/mara/reference.png"}],
+        "environment": {"name": "Snow Mountain", "reference": "assets/environments/snow_mountain/reference.png"},
+        "generation": {
+            "image": {"status": "pending", "attempts": 0},
+            "video": {"status": "pending", "attempts": 0},
+            "voice": {"status": "not_required"},
+            "sfx": {"status": "not_required"},
+            "music": {"status": "not_required"},
+        },
+    }
+    save_shot(tmp_path / "03_shots" / "S01_SH01.json", shot)
+    _seed_shot_candidate(tmp_path)
+
+    select_candidate(tmp_path, "shot:S01_SH01:image", "001")
+
+    updated_shot = load_shot(tmp_path / "03_shots" / "S01_SH01.json")
+    source_assets = updated_shot["generation"]["image"]["source_assets"]
+    assert {a["path"] for a in source_assets} == {
+        "assets/characters/mara/reference.png",
+        "assets/environments/snow_mountain/reference.png",
+    }
+    by_path = {a["path"]: a["sha256"] for a in source_assets}
+    assert by_path["assets/characters/mara/reference.png"] == sha256_of_file(reference)
+    assert by_path["assets/environments/snow_mountain/reference.png"] == sha256_of_file(env_reference)
+
+
+def test_select_candidate_skips_missing_character_or_environment_reference(tmp_path: Path):
+    shot = {
+        "schema_version": "1.0", "id": "S01_SH01", "status": "draft", "duration_seconds": 3,
+        "continuity": {"status": "pending", "checked_at": None, "issues": []},
+        "characters": [{"name": "Mara", "reference": "assets/characters/mara/reference.png"}],
+        "generation": {
+            "image": {"status": "pending", "attempts": 0},
+            "video": {"status": "pending", "attempts": 0},
+            "voice": {"status": "not_required"},
+            "sfx": {"status": "not_required"},
+            "music": {"status": "not_required"},
+        },
+    }
+    save_shot(tmp_path / "03_shots" / "S01_SH01.json", shot)
+    _seed_shot_candidate(tmp_path)
+
+    select_candidate(tmp_path, "shot:S01_SH01:image", "001")
+
+    updated_shot = load_shot(tmp_path / "03_shots" / "S01_SH01.json")
+    assert updated_shot["generation"]["image"]["source_assets"] == []
+
+
 def test_edit_candidate_blocked_without_approval(tmp_path: Path):
     _init_config(tmp_path)
     _seed_character_candidate(tmp_path)

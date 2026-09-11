@@ -1,6 +1,8 @@
 from pathlib import Path
 
 from ai_film.asset_staleness import check_stale
+from ai_film.candidate_store import add_candidates
+from ai_film.services.candidate_service import select_candidate
 from ai_film.shot_store import save_shot
 
 
@@ -98,3 +100,47 @@ def test_check_stale_reports_multiple_shots_independently(tmp_path: Path):
     result = check_stale(tmp_path)
 
     assert {r["shot_id"] for r in result} == {"S01_SH01", "S01_SH02"}
+
+
+def test_check_stale_catches_a_candidate_locked_shot_after_reference_changes(tmp_path: Path):
+    """End-to-end: a shot locked via the normal candidate loop
+    (generate-candidates -> select-candidate), not generate-image, must
+    still be caught by check-stale once its character reference changes
+    — this is the gap the final review on the asset-staleness branch
+    surfaced and candidate_service._source_assets_for_shot closes."""
+    reference = tmp_path / "assets" / "characters" / "mara" / "reference.png"
+    reference.parent.mkdir(parents=True)
+    reference.write_bytes(b"MARA-V1")
+
+    shot = {
+        "schema_version": "1.0", "id": "S01_SH01", "status": "draft", "duration_seconds": 3,
+        "continuity": {"status": "pending", "checked_at": None, "issues": []},
+        "characters": [{"name": "Mara", "reference": "assets/characters/mara/reference.png"}],
+        "generation": {
+            "image": {"status": "pending", "attempts": 0},
+            "video": {"status": "pending", "attempts": 0},
+            "voice": {"status": "not_required"},
+            "sfx": {"status": "not_required"},
+            "music": {"status": "not_required"},
+        },
+    }
+    save_shot(tmp_path / "03_shots" / "S01_SH01.json", shot)
+    candidates_dir = tmp_path / "04_storyboard" / "candidates" / "S01_SH01" / "candidates"
+    candidates_dir.mkdir(parents=True)
+    (candidates_dir / "001.png").write_bytes(b"CANDIDATE-IMAGE")
+    add_candidates(tmp_path, "shot:S01_SH01:image", [{
+        "id": "001", "path": "candidates/001.png", "provider": "mock", "model": "nano-banana",
+        "prompt": "wide shot", "parent": None, "operation": "generate", "job": None,
+        "estimated_cost": None, "created_at": "2026-09-10T00:00:00Z",
+    }])
+
+    select_candidate(tmp_path, "shot:S01_SH01:image", "001")
+    assert check_stale(tmp_path) == []  # clean immediately after locking
+
+    reference.write_bytes(b"MARA-V2-CHANGED")
+
+    result = check_stale(tmp_path)
+
+    assert result == [
+        {"shot_id": "S01_SH01", "changed_assets": ["assets/characters/mara/reference.png"]}
+    ]
