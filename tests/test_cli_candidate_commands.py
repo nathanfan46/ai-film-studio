@@ -93,7 +93,9 @@ def test_generate_candidates_for_shot_target_passes_character_references(
     """generate-candidates for a shot:*:image target must gather the shot's locked-in
     character reference images and thread them through to the provider, same as the
     pre-existing generate-image command does — otherwise storyboard candidates are
-    generated with zero conditioning on the character's selected reference.png."""
+    generated with zero conditioning on the character's selected reference.png. With
+    no --prompt, shot: targets default to camera-variant mode: one provider job per
+    variant, all sharing the same reference_paths."""
     project_dir = _init_mock_project(tmp_path)
     shot_path = project_dir / "03_shots" / "S01_SH01.json"
     save_shot(
@@ -132,9 +134,94 @@ def test_generate_candidates_for_shot_target_passes_character_references(
     )
 
     assert result.exit_code == 0, result.output
-    assert len(provider._requests) == 1
+    assert len(provider._requests) == 2, "camera-variant mode issues one job per variant"
+    for sent_request in provider._requests.values():
+        assert sent_request.reference_paths == [
+            str(project_dir / "assets/characters/girl/reference.png")
+        ]
+    prompts = [r.prompt for r in provider._requests.values()]
+    assert len(set(prompts)) == 2, "each camera variant must produce a distinct prompt"
+
+
+def _save_shot_with_camera(project_dir: Path, camera: dict | None = None) -> None:
+    save_shot(
+        project_dir / "03_shots" / "S01_SH01.json",
+        {
+            "schema_version": "1.0", "id": "S01_SH01", "status": "draft", "duration_seconds": 2,
+            "continuity": {"status": "pending", "checked_at": None, "issues": []},
+            "action": "girl steps out of darkness",
+            "camera": camera or {},
+            "generation": {
+                "image": {"status": "pending", "attempts": 0},
+                "video": {"status": "pending", "attempts": 0},
+                "voice": {"status": "not_required"},
+                "sfx": {"status": "not_required"},
+                "music": {"status": "not_required"},
+            },
+        },
+    )
+
+
+def test_generate_candidates_cameras_flag_overrides_default_pool(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    _save_shot_with_camera(project_dir, {"shot": "medium"})
+    runner.invoke(
+        app,
+        ["approve-generation", "--scope", "storyboard", "--targets", "shot:S01_SH01:image",
+         "--path", str(project_dir)],
+    )
+    provider = MockImageProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(
+        app,
+        ["generate-candidates", "--target", "shot:S01_SH01:image", "--count", "3",
+         "--cameras", "wide,over-the-shoulder", "--path", str(project_dir)],
+    )
+
+    assert result.exit_code == 0, result.output
+    from ai_film.candidate_store import load_candidate_set
+    candidate_set = load_candidate_set(project_dir, "shot:S01_SH01:image")
+    variants = [c["camera_variant"] for c in candidate_set["candidates"]]
+    assert variants == ["medium", "wide", "over-the-shoulder"]
+
+
+def test_generate_candidates_explicit_prompt_disables_camera_variants(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    _save_shot_with_camera(project_dir, {"shot": "medium"})
+    runner.invoke(
+        app,
+        ["approve-generation", "--scope", "storyboard", "--targets", "shot:S01_SH01:image",
+         "--path", str(project_dir)],
+    )
+    provider = MockImageProvider()
+    monkeypatch.setattr("ai_film.cli.resolve_provider", lambda capability, name: provider)
+
+    result = runner.invoke(
+        app,
+        ["generate-candidates", "--target", "shot:S01_SH01:image", "--count", "3",
+         "--prompt", "a custom hand-written prompt", "--path", str(project_dir)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(provider._requests) == 1, "an explicit --prompt must skip camera-variant mode"
     sent_request = next(iter(provider._requests.values()))
-    assert sent_request.reference_paths == [str(project_dir / "assets/characters/girl/reference.png")]
+    assert sent_request.num_candidates == 3
+    assert sent_request.prompt == "a custom hand-written prompt"
+
+
+def test_generate_candidates_cameras_flag_rejected_for_character_target(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    _approve_bibles(project_dir)
+
+    result = runner.invoke(
+        app,
+        ["generate-candidates", "--target", "character:girl", "--count", "2",
+         "--prompt", "a girl", "--cameras", "wide,medium", "--path", str(project_dir)],
+    )
+
+    assert result.exit_code == 1
+    assert "--cameras" in result.output
 
 
 def test_generate_candidates_for_character_target_sends_no_references(

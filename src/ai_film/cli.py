@@ -26,6 +26,7 @@ from ai_film.schema import validate_shot
 from ai_film.services.candidate_service import (
     edit_candidate as edit_candidate_service,
     generate_candidates as generate_candidates_service,
+    generate_shot_candidates as generate_shot_candidates_service,
     select_candidate as select_candidate_service,
 )
 from ai_film.services.generation_service import (
@@ -1177,26 +1178,60 @@ def generate_candidates_cmd(
     target: str = typer.Option(..., "--target"),
     count: int = typer.Option(..., "--count"),
     prompt: str = typer.Option(None, "--prompt"),
+    cameras: str = typer.Option(
+        None, "--cameras",
+        help="Comma-separated camera.shot labels overriding the built-in variant pool "
+        "(shot: targets only, ignored/rejected otherwise).",
+    ),
     path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
 ) -> None:
-    """Generate N image candidates for a character:/env:/shot: target (cost-gated)."""
+    """Generate N image candidates for a character:/env:/shot: target (cost-gated).
+
+    For shot: targets, each candidate is a distinct camera framing rather
+    than N re-rolls of the same prompt: the shot's own already-authored
+    camera.shot is always candidate #1, and the rest cycle through a
+    built-in variant pool (wide/medium/close-up/extreme-close-up/
+    over-the-shoulder/low-angle/high-angle) or the pool given via
+    --cameras. Passing an explicit --prompt disables camera-variant mode
+    (a custom prompt can't be reconciled with per-candidate framing text)
+    and falls back to the legacy same-prompt-N-candidates behavior.
+    character:/env: targets never vary camera — they need one consistent
+    identity, not framing variety — so --cameras is rejected there.
+    """
     stage_config, gen_config = _stage_config(path, "image")
 
+    if not target.startswith("shot:"):
+        if prompt is None:
+            typer.echo("--prompt is required for character:/env: targets", err=True)
+            raise typer.Exit(code=1)
+        if cameras is not None:
+            typer.echo("--cameras only applies to shot: targets", err=True)
+            raise typer.Exit(code=1)
+
     references: list[str] = []
+    shot_data: dict | None = None
+    spatial = None
+    variant_mode = False
     if target.startswith("shot:"):
         shot_id = target.split(":")[1]
         shot_data = load_shot(path / "03_shots" / f"{shot_id}.json")
         references = _image_references(path, shot_id, shot_data)
-        if prompt is None:
-            prompt = build_image_prompt(
-                shot_data, spatial=_effective_spatial(path, shot_id, shot_data),
-            )
-    elif prompt is None:
-        typer.echo("--prompt is required for character:/env: targets", err=True)
-        raise typer.Exit(code=1)
+        variant_mode = prompt is None
+        if variant_mode:
+            spatial = _effective_spatial(path, shot_id, shot_data)
 
     def _run():
         provider = resolve_provider(Capability.IMAGE, stage_config["provider"])
+        if variant_mode:
+            cameras_list = [c.strip() for c in cameras.split(",")] if cameras else None
+            return generate_shot_candidates_service(
+                project_dir=path, target=target, provider=provider,
+                shot=shot_data, model=stage_config["model"], count=count,
+                provider_name=stage_config["provider"],
+                max_attempts=gen_config["max_attempts"],
+                poll_interval_seconds=gen_config["poll_interval_seconds"],
+                reference_paths=references, cameras=cameras_list, spatial=spatial,
+            )
         kwargs = {"reference_paths": references} if target.startswith("shot:") else {}
         return generate_candidates_service(
             project_dir=path, target=target, provider=provider,

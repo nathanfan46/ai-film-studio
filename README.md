@@ -140,7 +140,31 @@ that shot's `generation.image.artifact` in `shot.json`, exactly like `generate-i
 would — the rest of the pipeline (`status`, `render`) doesn't know or care whether
 an image came from the candidate loop or a direct `generate-image` call.
 
-Environments use the same pattern with `--target env:<name>`.
+**Camera-variant candidates.** For a shot target with no `--prompt`, each
+candidate is a *different camera framing*, not a re-roll of the same one —
+candidate `001` is always the shot's own already-authored `camera.shot`, and
+the rest cycle through a built-in pool (`wide`, `medium`, `close-up`,
+`extreme-close-up`, `over-the-shoulder`, `low-angle`, `high-angle`):
+
+```bash
+ai-film generate-candidates --target shot:S01_SH01:image --count 4
+# 001 = your shot's existing camera.shot, 002-004 = three other framings
+```
+
+Pass `--cameras wide,over-the-shoulder` to use a specific set of framings
+instead of the default pool (still deduplicated against the original and
+against itself, in order). Passing an explicit `--prompt` disables
+camera-variant mode entirely and falls back to `--count` re-rolls of that one
+prompt — `--cameras` is rejected together with `--prompt`, and rejected
+outright for `character:`/`env:` targets, which always need one consistent
+identity rather than framing variety. Whichever candidate you lock with
+`select-candidate` becomes the shot's canonical `camera.shot` — if you picked
+the `close-up` candidate, `shot.json`'s `camera.shot` becomes `"close-up"`,
+so `build_video_prompt`/`check-stale` see the framing you actually chose, not
+whatever was there before you ran `generate-candidates`.
+
+Environments use the character pattern (`--target env:<name>`, `--prompt`
+required, no camera variants).
 
 Video/audio candidates and a whole-film preview aren't built yet — see Roadmap below.
 

@@ -171,7 +171,7 @@ then continue to Step 5 for this batch.
 
 For each shot in the approved batch, in that order:
 
-1. Generate candidates — no `--prompt` needed, it's derived automatically from the shot's `action`/`visual`/`camera` fields:
+1. Generate candidates — no `--prompt` needed, it's derived automatically from the shot's `action`/`visual`/`camera` fields. Each candidate is a **different camera framing**, not a re-roll of the same one: candidate `001` is always the shot's own already-authored `camera.shot`, and the rest cycle through a built-in variant pool (wide/medium/close-up/extreme-close-up/over-the-shoulder/low-angle/high-angle). Pass `--cameras wide,close-up,...` only if this specific shot needs framings outside that default pool — otherwise omit it:
 
 ```bash
 ai-film generate-candidates --target shot:<id>:image --count <N>
@@ -179,8 +179,8 @@ ai-film generate-candidates --target shot:<id>:image --count <N>
 
 If this call fails — with a cost-gate error (Step 4's approval didn't cover this shot id) or any other provider error — do not retry it yourself. Emit a `NEEDS_INPUT` with `type: confirmation` (`id: generation_error_<shot-id>`) showing the exact error text and offering: re-approve (with this shot id included) and retry, adjust the shot's fields and regenerate, or skip this shot for now. Stop your turn. Act only once resumed — if the answer is re-approve, that needs a fresh `cost_approval` round trip (Step 4) before `approve-generation` runs again.
 
-2. Run `ai-film review --target shot:<id>:image` to open the gallery, and **read each candidate PNG directly** (`PROJECT_PATH/04_storyboard/candidates/<id>/candidates/<candidate-id>.png` — note the doubled `candidates/` segment: `target_dir` for a shot target is already `04_storyboard/candidates/<id>`, and candidate generation appends its own `candidates/` subdirectory on top of that, unlike character/env targets which only have one `candidates/` level) with the Read tool.
-3. Emit a `NEEDS_INPUT` with `type: clarification` (`id: shot_feedback_<shot-id>_1`) asking what the user thinks. For every edit round in the resumed reply, **view the specific candidate with the Read tool first**, then:
+2. Run `ai-film review --target shot:<id>:image` to open the gallery, and **read each candidate PNG directly** (`PROJECT_PATH/04_storyboard/candidates/<id>/candidates/<candidate-id>.png` — note the doubled `candidates/` segment: `target_dir` for a shot target is already `04_storyboard/candidates/<id>`, and candidate generation appends its own `candidates/` subdirectory on top of that, unlike character/env targets which only have one `candidates/` level) with the Read tool. Also read `PROJECT_PATH/04_storyboard/candidates/<id>/candidates.json` and note each candidate's `camera_variant` — label each candidate by its framing when presenting the review round (e.g. "001 = medium, your original framing; 002 = wide; 003 = close-up") so the human is choosing a framing, not just an unlabeled image.
+3. Emit a `NEEDS_INPUT` with `type: clarification` (`id: shot_feedback_<shot-id>_1`) asking what the user thinks, framing-labeled as above. For every edit round in the resumed reply, **view the specific candidate with the Read tool first**, then:
 
 ```bash
 ai-film edit-candidate --target shot:<id>:image --id <candidate-id> --instruction "<instruction>"
@@ -196,7 +196,7 @@ Re-review and view the result the same way, then emit another `NEEDS_INPUT` (`ty
 ai-film select-candidate --target shot:<id>:image --id <candidate-id>
 ```
 
-This writes the image into that shot's `generation.image.artifact` and marks it completed — the same effect `generate-image` would have, so nothing downstream needs to know it came from the candidate loop. `select-candidate` is re-runnable with a different `--id` if the user changes their mind later — just another `type: selection` round trip.
+This writes the image into that shot's `generation.image.artifact` and marks it completed — the same effect `generate-image` would have, so nothing downstream needs to know it came from the candidate loop. If the picked candidate carries a `camera_variant`, this also updates the shot's `camera.shot` to match — the framing the human actually chose becomes the shot's canonical camera, not whatever `camera.shot` was before generating candidates; nothing else to do here, it's automatic. `select-candidate` is re-runnable with a different `--id` if the user changes their mind later — just another `type: selection` round trip.
 
 **If this was the scene's first shot** (`S<SS>_SH01`) **and you established a spatial canon for it in Step 2** (i.e. you called `set-scene-continuity` for at least one on-screen character there — a characterless establishing shot has no canon and needs no master reference, so skip this step entirely for that case), immediately run `ai-film lock-continuity-master --scene S<SS>` right after locking it, before moving on to the scene's next shot:
 

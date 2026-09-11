@@ -1,4 +1,5 @@
 # tests/services/test_candidate_service.py
+import json
 from pathlib import Path
 
 import pytest
@@ -7,7 +8,12 @@ from ai_film.approval import approve_generation
 from ai_film.candidate_store import add_candidates, load_candidate_set
 from ai_film.errors import CostGateError, ProviderError
 from ai_film.providers.mock.image import MockImageProvider
-from ai_film.services.candidate_service import edit_candidate, generate_candidates, select_candidate
+from ai_film.services.candidate_service import (
+    edit_candidate,
+    generate_candidates,
+    generate_shot_candidates,
+    select_candidate,
+)
 from ai_film.shot_store import load_shot, save_shot
 
 
@@ -408,6 +414,189 @@ def test_select_candidate_records_continuity_master_reference_as_source_asset(tm
     shot2_updated = load_shot(tmp_path / "03_shots" / "S01_SH02.json")
     source_assets = shot2_updated["generation"]["image"]["source_assets"]
     assert {a["path"] for a in source_assets} == {"04_storyboard/S01_SH01.png"}
+
+
+def _shot_for_variants(camera: dict | None = None) -> dict:
+    return {
+        "schema_version": "1.0", "id": "S01_SH01", "status": "draft", "duration_seconds": 3,
+        "camera": camera or {},
+        "action": "Mara walks down the corridor",
+        "continuity": {"status": "pending", "checked_at": None, "issues": []},
+        "generation": {
+            "image": {"status": "pending", "attempts": 0},
+            "video": {"status": "pending", "attempts": 0},
+            "voice": {"status": "not_required"}, "sfx": {"status": "not_required"},
+            "music": {"status": "not_required"},
+        },
+    }
+
+
+def test_generate_shot_candidates_issues_one_job_per_variant_with_distinct_prompts(tmp_path: Path):
+    _init_config(tmp_path)
+    approve_generation(tmp_path, "storyboard", ["shot:S01_SH01:image"], estimated_cost=0.32)
+    provider = MockImageProvider()
+    shot = _shot_for_variants({"shot": "medium"})
+
+    result = generate_shot_candidates(
+        project_dir=tmp_path, target="shot:S01_SH01:image", provider=provider,
+        shot=shot, model="nano-banana", count=4, provider_name="mock",
+    )
+
+    assert len(result["added"]) == 4
+    assert provider._submit_calls == 4, "one provider job per variant, never a batched request"
+    prompts = [request.prompt for request in provider._requests.values()]
+    assert len(set(prompts)) == 4, "each variant must produce a distinct prompt"
+    assert all(request.num_candidates == 1 for request in provider._requests.values())
+
+
+def test_generate_shot_candidates_stamps_camera_variant_on_each_entry(tmp_path: Path):
+    _init_config(tmp_path)
+    approve_generation(tmp_path, "storyboard", ["shot:S01_SH01:image"], estimated_cost=0.32)
+    provider = MockImageProvider()
+    shot = _shot_for_variants({"shot": "medium"})
+
+    generate_shot_candidates(
+        project_dir=tmp_path, target="shot:S01_SH01:image", provider=provider,
+        shot=shot, model="nano-banana", count=4, provider_name="mock",
+    )
+
+    candidate_set = load_candidate_set(tmp_path, "shot:S01_SH01:image")
+    variants = [c["camera_variant"] for c in candidate_set["candidates"]]
+    assert variants == ["medium", "wide", "close-up", "extreme-close-up"]
+
+
+def test_generate_shot_candidates_with_no_original_camera_skips_reserved_slot(tmp_path: Path):
+    _init_config(tmp_path)
+    approve_generation(tmp_path, "storyboard", ["shot:S01_SH01:image"], estimated_cost=0.32)
+    provider = MockImageProvider()
+    shot = _shot_for_variants(None)
+
+    generate_shot_candidates(
+        project_dir=tmp_path, target="shot:S01_SH01:image", provider=provider,
+        shot=shot, model="nano-banana", count=3, provider_name="mock",
+    )
+
+    candidate_set = load_candidate_set(tmp_path, "shot:S01_SH01:image")
+    variants = [c["camera_variant"] for c in candidate_set["candidates"]]
+    assert variants == ["wide", "medium", "close-up"]
+
+
+def test_generate_shot_candidates_respects_cameras_override(tmp_path: Path):
+    _init_config(tmp_path)
+    approve_generation(tmp_path, "storyboard", ["shot:S01_SH01:image"], estimated_cost=0.32)
+    provider = MockImageProvider()
+    shot = _shot_for_variants({"shot": "medium"})
+
+    generate_shot_candidates(
+        project_dir=tmp_path, target="shot:S01_SH01:image", provider=provider,
+        shot=shot, model="nano-banana", count=3, provider_name="mock",
+        cameras=["wide", "over-the-shoulder"],
+    )
+
+    candidate_set = load_candidate_set(tmp_path, "shot:S01_SH01:image")
+    variants = [c["camera_variant"] for c in candidate_set["candidates"]]
+    assert variants == ["medium", "wide", "over-the-shoulder"]
+
+
+def test_generate_shot_candidates_threads_reference_paths_into_every_variant_request(tmp_path: Path):
+    _init_config(tmp_path)
+    approve_generation(tmp_path, "storyboard", ["shot:S01_SH01:image"], estimated_cost=0.32)
+    provider = MockImageProvider()
+    shot = _shot_for_variants({"shot": "medium"})
+
+    generate_shot_candidates(
+        project_dir=tmp_path, target="shot:S01_SH01:image", provider=provider,
+        shot=shot, model="nano-banana", count=2, provider_name="mock",
+        reference_paths=["assets/characters/mara/reference.png"],
+    )
+
+    assert all(
+        request.reference_paths == ["assets/characters/mara/reference.png"]
+        for request in provider._requests.values()
+    )
+
+
+def _seed_shot_with_camera(tmp_path: Path, camera: dict) -> None:
+    shot = {
+        "schema_version": "1.0", "id": "S01_SH01", "status": "draft", "duration_seconds": 3,
+        "camera": camera,
+        "continuity": {"status": "pending", "checked_at": None, "issues": []},
+        "generation": {
+            "image": {"status": "pending", "attempts": 0},
+            "video": {"status": "pending", "attempts": 0},
+            "voice": {"status": "not_required"}, "sfx": {"status": "not_required"},
+            "music": {"status": "not_required"},
+        },
+    }
+    save_shot(tmp_path / "03_shots" / "S01_SH01.json", shot)
+
+
+def _seed_shot_candidate_with_variant(tmp_path: Path, camera_variant: str | None) -> None:
+    directory = tmp_path / "04_storyboard" / "candidates" / "S01_SH01" / "candidates"
+    directory.mkdir(parents=True)
+    (directory / "001.png").write_bytes(b"SHOT-CANDIDATE")
+    add_candidates(tmp_path, "shot:S01_SH01:image", [{
+        "id": "001", "path": "candidates/001.png", "provider": "mock", "model": "nano-banana",
+        "prompt": "close-up shot", "parent": None, "operation": "generate", "job": None,
+        "estimated_cost": None, "created_at": "2026-09-10T00:00:00Z",
+        "camera_variant": camera_variant,
+    }])
+
+
+def test_select_candidate_updates_shot_camera_to_selected_variant(tmp_path: Path):
+    _seed_shot_with_camera(tmp_path, {"shot": "medium", "movement": "static"})
+    _seed_shot_candidate_with_variant(tmp_path, "close-up")
+
+    select_candidate(tmp_path, "shot:S01_SH01:image", "001")
+
+    shot = load_shot(tmp_path / "03_shots" / "S01_SH01.json")
+    assert shot["camera"]["shot"] == "close-up"
+
+
+def test_select_candidate_camera_write_back_preserves_other_camera_fields(tmp_path: Path):
+    _seed_shot_with_camera(tmp_path, {"shot": "medium", "movement": "slow_push_in"})
+    _seed_shot_candidate_with_variant(tmp_path, "close-up")
+
+    select_candidate(tmp_path, "shot:S01_SH01:image", "001")
+
+    shot = load_shot(tmp_path / "03_shots" / "S01_SH01.json")
+    assert shot["camera"]["movement"] == "slow_push_in"
+
+
+def test_select_candidate_leaves_camera_unchanged_for_legacy_candidate_without_variant(tmp_path: Path):
+    _seed_shot_with_camera(tmp_path, {"shot": "medium"})
+    _seed_shot_candidate_with_variant(tmp_path, None)
+
+    select_candidate(tmp_path, "shot:S01_SH01:image", "001")
+
+    shot = load_shot(tmp_path / "03_shots" / "S01_SH01.json")
+    assert shot["camera"]["shot"] == "medium"
+
+
+def test_select_candidate_writes_camera_update_provenance_log(tmp_path: Path):
+    _seed_shot_with_camera(tmp_path, {"shot": "medium"})
+    _seed_shot_candidate_with_variant(tmp_path, "close-up")
+
+    select_candidate(tmp_path, "shot:S01_SH01:image", "001")
+
+    logs = list((tmp_path / "99_logs" / "shot_S01_SH01_image").glob("*_select-candidate_attempt01.json"))
+    assert len(logs) == 1
+    payload = json.loads(logs[0].read_text())
+    assert payload["request"]["candidate_id"] == "001"
+    assert payload["request"]["camera_variant"] == "close-up"
+    assert payload["response"]["camera_shot_before"] == "medium"
+    assert payload["response"]["camera_shot_after"] == "close-up"
+    assert payload["outcome"] == "camera_updated"
+
+
+def test_select_candidate_skips_provenance_log_for_legacy_candidate(tmp_path: Path):
+    _seed_shot_with_camera(tmp_path, {"shot": "medium"})
+    _seed_shot_candidate_with_variant(tmp_path, None)
+
+    select_candidate(tmp_path, "shot:S01_SH01:image", "001")
+
+    logs = list((tmp_path / "99_logs" / "shot_S01_SH01_image").glob("*_select-candidate_attempt01.json"))
+    assert logs == []
 
 
 def test_edit_candidate_blocked_without_approval(tmp_path: Path):

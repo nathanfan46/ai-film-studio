@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ai_film.approval import is_approved
+from ai_film.camera_variants import resolve_camera_variants
 from ai_film.candidate_store import (
     add_candidates,
     get_candidate,
@@ -19,6 +20,7 @@ from ai_film.errors import CostGateError
 from ai_film.jobs import run_job
 from ai_film.logging_store import write_attempt_log
 from ai_film.models import GenerationJob, ImageEditRequest, ImageGenerationRequest
+from ai_film.prompts import build_image_prompt
 from ai_film.scene_continuity import load_continuity, scene_id_for_shot
 from ai_film.services.generation_service import project_relative_path, sha256_of_file
 from ai_film.shot_store import load_shot, previous_shot_image_reference, save_shot
@@ -83,6 +85,7 @@ def generate_candidates(
     max_attempts: int = 3,
     poll_interval_seconds: float = 0.0,
     reference_paths: list[str] | None = None,
+    camera_variant: str | None = None,
 ) -> dict:
     if count <= 0:
         raise ValueError(f"count must be positive, got {count}")
@@ -139,10 +142,51 @@ def generate_candidates(
             "job": {"provider": job_result.job.provider, "id": job_result.job.id},
             "estimated_cost": None,
             "created_at": created_at,
+            "camera_variant": camera_variant,
         })
 
     add_candidates(project_dir, target, entries)
     return {"target": target, "added": [e["id"] for e in entries]}
+
+
+def generate_shot_candidates(
+    project_dir: Path,
+    target: str,
+    provider,
+    shot: dict,
+    model: str,
+    count: int,
+    provider_name: str,
+    max_attempts: int = 3,
+    poll_interval_seconds: float = 0.0,
+    reference_paths: list[str] | None = None,
+    cameras: list[str] | None = None,
+    spatial: dict | None = None,
+) -> dict:
+    """Generate `count` shot-target candidates, each a distinct camera
+    framing rather than `count` re-rolls of the same prompt — a provider's
+    num_candidates only re-samples one prompt, so each variant is its own
+    single-candidate job (see resolve_camera_variants for the reserved-slot
+    and dedup rules). shot.camera itself is never mutated here; each
+    variant's prompt is built from a shallow copy so the persisted shot
+    only changes later, in select_candidate, once a variant is actually
+    picked."""
+    original = (shot.get("camera") or {}).get("shot")
+    variants = resolve_camera_variants(original, count, cameras)
+
+    added: list[str] = []
+    for label in variants:
+        variant_shot = {**shot, "camera": {**(shot.get("camera") or {}), "shot": label}}
+        prompt = build_image_prompt(variant_shot, spatial=spatial)
+        result = generate_candidates(
+            project_dir, target, provider, prompt, model, count=1,
+            provider_name=provider_name, max_attempts=max_attempts,
+            poll_interval_seconds=poll_interval_seconds,
+            reference_paths=reference_paths, camera_variant=label,
+        )
+        added.extend(result["added"])
+
+    return {"target": target, "added": added}
 
 
 def select_candidate(project_dir: Path, target: str, candidate_id: str) -> dict:
@@ -165,6 +209,20 @@ def select_candidate(project_dir: Path, target: str, candidate_id: str) -> dict:
         dest_path = project_dir / "04_storyboard" / f"{shot_id}.png"
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(source_path, dest_path)
+
+        # A camera-variant candidate's shot.camera.shot is the actual camera
+        # instruction its prompt was built from; camera_variant on the
+        # candidate is provenance describing why it exists. Once selected,
+        # the variant becomes canonical — shot.camera.shot must agree with
+        # what's actually locked, or build_video_prompt/check-stale keep
+        # reading the pre-selection value. Legacy candidates (no
+        # camera_variant, e.g. anything selected before this feature or any
+        # character:/env: selection) leave shot.camera untouched.
+        camera_variant = candidate.get("camera_variant")
+        camera_before = (shot.get("camera") or {}).get("shot")
+        if camera_variant:
+            shot["camera"] = {**shot.get("camera", {}), "shot": camera_variant}
+
         # NOTE: this intentionally does not go through archive_stage_artifact
         # (see src/ai_film/services/generation_service.py) — select_candidate
         # predates the media-review-layer's version/history bookkeeping, and
@@ -185,6 +243,18 @@ def select_candidate(project_dir: Path, target: str, candidate_id: str) -> dict:
             "source_assets": _source_assets_for_shot(project_dir, shot, shot_id),
         }
         save_shot(shot_path, shot)
+
+        if camera_variant:
+            write_attempt_log(
+                project_dir, _log_group(target), "select-candidate", 1,
+                job=None,
+                request={"candidate_id": candidate_id, "camera_variant": camera_variant},
+                response={
+                    "camera_shot_before": camera_before,
+                    "camera_shot_after": camera_variant,
+                },
+                outcome="camera_updated" if camera_before != camera_variant else "camera_unchanged",
+            )
 
     return {
         "target": target,

@@ -143,7 +143,29 @@ ai-film select-candidate --target character:girl --id 005 --path ~/my-film
 一樣——後續流程（`status`、`render`）並不知道、也不在乎一張圖片是來自候選圖迴圈
 還是直接呼叫 `generate-image`。
 
-場景（environments）也是同樣的模式，使用 `--target env:<name>`。
+**攝影機構圖變化的候選圖。** 對於省略 `--prompt` 的鏡頭 target，每個候選版本會是
+*不同的攝影機構圖*，而不是同一構圖重跑好幾次——候選 `001` 永遠是這個鏡頭原本已經
+寫好的 `camera.shot`，其餘則會從內建的構圖清單中依序選取（`wide`、`medium`、
+`close-up`、`extreme-close-up`、`over-the-shoulder`、`low-angle`、`high-angle`）：
+
+```bash
+ai-film generate-candidates --target shot:S01_SH01:image --count 4
+# 001 = 這個鏡頭原本的 camera.shot，002-004 = 另外三種構圖
+```
+
+如果想指定特定的構圖組合而不是用內建清單，可以加上
+`--cameras wide,over-the-shoulder`（一樣會先去除重複，包含跟原始構圖重複的部分，
+並保留你指定的順序）。只要明確傳入 `--prompt`，就會完全關閉攝影機構圖變化，改回
+原本「同一個提示詞重跑 `--count` 次」的行為——這種情況下 `--cameras` 會被拒絕；
+對 `character:`／`env:` target 來說 `--cameras` 也一律會被拒絕，因為這兩種
+target 需要的是統一不變的外觀，而不是構圖上的變化。你用 `select-candidate`
+鎖定的那個候選版本，會成為這個鏡頭正式的 `camera.shot`——如果你選的是
+`close-up` 這個候選版本，`shot.json` 裡的 `camera.shot` 就會變成 `"close-up"`，
+這樣 `build_video_prompt`／`check-stale` 讀到的就是你實際選定的構圖，而不是跑
+`generate-candidates` 之前原本寫的那個值。
+
+場景（environments）沿用角色 target 的模式（`--target env:<name>`，`--prompt`
+為必填，不支援攝影機構圖變化）。
 
 影片／音訊的候選版本以及整部片的預覽功能目前還沒做——詳見下方 Roadmap。
 
