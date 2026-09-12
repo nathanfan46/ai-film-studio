@@ -29,6 +29,8 @@ This is not a node editor. ComfyUI already has one.
 | Automatic parameter-level understanding of every node in a workflow (e.g. every MimicMotion/LivePortrait widget) | Rejected for V1 | Would require cataloging arbitrary custom nodes' internal widget schemas, which don't exist in the workflow JSON itself (see "The widget-addressing problem"). V1 gets targeted parameter writes only for a small, hand-curated "known node" registry; everything else is still modifiable via type-safe graph surgery (see "Three mutation primitives"). |
 | Shot.json integration (a shot referencing/embedding a ComfyUI workflow) | Deferred | Genuinely useful later, but touches the shot schema, which should not be redesigned for this pass. A workflow is a standalone, shareable asset in V1, the same way a template is. |
 | Static HTML visualization of the workflow graph (`07_review`) | Deferred | Explicitly optional in the originating feature request. This plan is already the largest single feature in the backlog; visualization is a natural, self-contained fast-follow once the core loop is proven. |
+| Expanding Layer B pre-emptively for popular custom-node families (a full MimicMotion/LivePortrait parameter map) | Rejected | Layer B stays small and hand-curated, growing one node type at a time only when a real user request needs parameter-level access to it — not predicted in advance. The internal widget schemas for arbitrary custom nodes aren't reliably available from the workflow JSON alone (see "The widget-addressing problem"), so speculative registry entries would be guesses, not verified facts, violating this project's own standing practice of never encoding an unverified assumption as fact. |
+| A general multi-mutation transaction/rollback engine | Deferred | Real value once natural-language requests routinely span several edits, but V1 gets there more cheaply: each *individual* mutation is atomic (validated in memory before anything is written to disk), and a multi-step request executes as a sequence of atomic steps with a mutation log the agent uses to report exactly what succeeded before a failure. See "Atomicity and the mutation log" below. |
 
 ## Real-world grounding
 
@@ -157,6 +159,20 @@ algorithm:
    instance, preserving declared order. X's position in the *filtered*
    list is its index into `widgets_values` (array-addressed types) or
    its name is used directly (dict-addressed types).
+4. **Never guess past this point.** Before trusting the computed
+   position, sanity-check it against the actual instance: for
+   array-addressed types, the filtered widget-order list's length must
+   equal `len(widgets_values)` on this node; for dict-addressed types,
+   every filtered field name must actually be a key present in the
+   dict. If either check fails — the registry's assumed widget schema
+   doesn't match what this specific node instance actually contains,
+   which can happen as custom nodes and even core ComfyUI nodes evolve
+   their widget layout across versions — `set-workflow-field` returns a
+   clear `schema mismatch` error naming the node, field, and the
+   expected vs. actual shape, rather than writing to a position that
+   might be wrong. The caller (agent or human) then chooses
+   `set-workflow-raw` with an explicitly named index/key, accepting the
+   risk deliberately instead of it being silently taken for them.
 
 This is bounded and tractable precisely because Layer B is small and
 hand-curated — this would not scale to a "know every node" registry,
@@ -171,6 +187,15 @@ opaque), and a flat list of `Note` node text (verbatim, **not**
 auto-correlated to a specific stage by spatial-proximity heuristics —
 canvas layout is arbitrary and this kind of correlation is exactly the
 fuzzy judgment call the agent layer exists for).
+
+Every resolved connection in `list-workflow-nodes`'s output carries an
+explicit `"resolution"` tag: `"direct"` when the source was reached
+directly or through only `Reroute` hops, or `"opaque_passthrough"` when
+resolution stopped at an unresolvable bundler node. This distinction
+must be visible, not silently absorbed — an agent that sees
+`KSampler.model ← (opaque_passthrough) ← node 271` should reason "there
+is a connection here I can't see through," never "this input has
+nothing feeding it."
 
 Deciding "this is a singing-reanimation pipeline, MimicMotion handles
 body motion and LivePortrait handles facial expression, per this note
@@ -206,13 +231,50 @@ function over that same dict. Every mutation (`set-workflow-field`,
 narrow, targeted in-place field edit on that same dict, followed by
 `validate_workflow`. Export writes that same dict back out.
 
-This is what makes "preserve unknown nodes," "preserve node IDs,"
-"preserve custom node data," and "a no-op import→export is
-byte-equivalent" true for free, rather than properties a converter has
-to be separately engineered to uphold. The only thing that changes on
-export is JSON formatting (`json.dumps(..., indent=2)`, this
-repo's existing convention) — matching this spec's own "semantic
-equivalence, not byte equality" round-trip requirement.
+This is what makes "preserve unknown nodes," "preserve node IDs," and
+"preserve custom node data" true for free, rather than properties a
+converter has to be separately engineered to uphold. A no-op
+import→export is **structurally equivalent and preserves all workflow
+data** — same nodes, same ids, same types, same links, same
+`widgets_values`, same unknown/custom fields — not byte-equivalent: the
+only thing that changes is JSON formatting (`json.dumps(..., indent=2)`,
+this repo's existing convention). Testing verifies the structural claim
+directly (see "Testing" below), which is the defensible guarantee — byte
+equality would additionally require preserving the original file's exact
+whitespace/key-ordering characteristics, which is not worth the
+complexity for a real, achievable win of the same practical value.
+
+## Atomicity and the mutation log
+
+Two related risks the mutation architecture must not leave open:
+
+**Within one mutation.** Every mutation command (`set-workflow-field`,
+`set-workflow-raw`, `rewire-workflow-link`, `remove-workflow-node`)
+loads the stored workflow, applies its one edit **in memory**, runs
+`validate_workflow`, and only writes to
+`assets/workflows/<id>/workflow.json` if there are no errors. On
+failure, the command exits non-zero and the file on disk is untouched —
+every single mutation call is atomic by construction, not by a
+separate rollback step.
+
+**Across several mutations for one request.** A natural-language ask
+like "remove the LoRA, change the character to Mara, and switch the
+checkpoint" is three separate primitive calls. A full transaction
+(stage all three, validate once, commit atomically or not at all) is
+real future value but unnecessary complexity for V1 — instead, each
+call is atomic individually and applied sequentially, and every
+mutation call appends one entry to a workflow-scoped log via the
+existing `write_attempt_log` mechanism already used elsewhere in this
+codebase (e.g. `candidate_service.py`'s selection provenance logging),
+at `99_logs/workflow_<id>/`: which primitive ran, its arguments, and a
+before/after summary. If step 2 of 3 fails, steps 1 and 2's log entries
+already show exactly what's applied — the agent reads this log to
+report precisely what succeeded before reporting the failure and asking
+the human how to proceed (undo via more conversation, or continue from
+the partial state), rather than the human discovering an inconsistent
+workflow later with no explanation. This is deliberately simpler than a
+transaction engine and is upgraded to one only if real usage shows the
+sequential-with-reporting approach isn't enough.
 
 ## `validate_workflow`
 
@@ -225,14 +287,36 @@ Mirrors the existing `validate_shot`/`validate_template` naming
 convention, extended with a severity split (new to this codebase,
 justified by a real need: community workflows are messy, and treating
 every anomaly as fatal would make this feature useless on exactly the
-workflows it needs to handle).
+workflows it needs to handle). Two named levels for V1; a third is
+explicitly identified and explicitly deferred:
 
-**Errors** (block export/mutation): a link id referenced by a node's
-`inputs[].link` that doesn't exist in the top-level `links` array (or
-vice versa); a link whose `target_id`/`target_slot` doesn't match the
-node it claims to target; a rewire that connects incompatible socket
-`type` strings (types are already declared on every socket, known node
-or not — this check needs zero node-specific knowledge).
+**Level 1 — graph integrity (errors, block export/mutation).** A link
+id referenced by a node's `inputs[].link` that doesn't exist in the
+top-level `links` array (or vice versa); a link whose `target_id`/
+`target_slot` doesn't match the node it claims to target; a rewire that
+connects incompatible socket `type` strings (types are already declared
+on every socket, known node or not — this check needs zero
+node-specific knowledge).
+
+**Level 2 — known-node semantic validation (errors, Layer B fields
+only).** Part of `validate_workflow`'s normal whole-graph pass, exactly
+like Level 1 — not a check gated to the moment of a
+`set-workflow-field` call. Every node matching a Layer B type has its
+known fields checked against that field's declared shape in the
+registry (e.g. `steps` must parse as a positive integer, `sampler_name`
+must be a non-empty string) — a basic type/shape sanity check using data
+the registry already carries for addressing, not a reimplementation of
+ComfyUI's own per-node validation. This means a bad value is caught the
+same way whether it was just written by `set-workflow-field` or was
+already present in the imported file. It only ever applies to the small
+set of fields Layer B actually knows about; it says nothing about nodes
+outside the registry.
+
+**Level 3 — environment validation (deferred, not V1).** Whether
+required custom nodes or models are actually installed and available at
+generation time. The success criteria already state that running the
+exported workflow assumes those are installed — V1 does not attempt to
+verify it.
 
 **Warnings** (surfaced, never blocking): a node type matching neither
 Layer A nor Layer B (fully unclassified); a node identified as a
@@ -240,7 +324,9 @@ generic passthrough/bundler that can't be resolved through (e.g.
 Crystools' pipe nodes); anything else structurally sound but outside
 this tool's understanding.
 
-Run automatically after every mutation and before every export.
+Run automatically after every mutation (before that mutation's write —
+see "Atomicity and the mutation log" above) and standalone before every
+export.
 
 ## Three mutation primitives
 
@@ -266,9 +352,36 @@ unambiguous type-matching input/output pair on the removed node — e.g.
 its direct links are simply removed, leaving a gap the agent must
 mention) work on **any** node, known or not. **`set-workflow-field`**
 (Layer B only, clear error naming the escape hatch if the node isn't
-registered) and **`set-workflow-raw`** (explicit index/key, for
-anything outside the registry, clearly labeled as unsafe/best-effort)
-cover the smaller set of true parameter edits.
+registered, or the schema-mismatch error described above) and
+**`set-workflow-raw`** (explicit index/key, for anything outside the
+registry, clearly labeled as unsafe/best-effort) cover the smaller set
+of true parameter edits.
+
+**`set-workflow-raw` requires human confirmation before use.** This is
+a hard rule enforced at the agent-instruction level (mirroring how this
+project already gates real spend behind an explicit
+`NEEDS_INPUT`/`HUMAN_RESPONSE` cost-approval round trip before
+`generate-candidates`/`edit-candidate` run) — the agent must never call
+it silently. It states plainly which node, which raw index or key, and
+why (the node isn't in the known registry, or the registry's expected
+shape didn't match this instance), and proceeds only after the human
+says yes. `set-workflow-field`, `rewire-workflow-link`, and
+`remove-workflow-node` need no such gate — their safety comes from
+`validate_workflow`, not from asking permission first.
+
+**Node identity is contextual, not merely id-based.** A workflow can
+contain several structurally-identical node families (e.g. two
+independent `LivePortraitCropper → LivePortraitRetargeting →
+LivePortraitComposite` chains processing two different source clips).
+A bare node id means nothing to a human ("change node 241"), and the
+agent must not treat id as sufficient context for identifying which
+chain a request like "change the face settings on the second one"
+refers to. `list-workflow-nodes` always includes each node's resolved neighbors
+(per the `direct`/`opaque_passthrough` tagging above), precisely so the
+agent can disambiguate using role + neighbors + upstream/downstream
+source — cross-referenced, at the agent's own discretion, against the
+flat notes list `describe-workflow` already surfaces — the same way a
+human would trace wires on the canvas. Never by id alone.
 
 ## Storage
 
@@ -314,8 +427,25 @@ is). Flow: `import-workflow` → `describe-workflow` → present the
 agent's own narrated understanding to the human → loop on natural-
 language change requests via the same `NEEDS_INPUT`/`HUMAN_RESPONSE`
 protocol every other agent in this project already uses, picking
-whichever primitive makes the smallest targeted change → re-describe/
-confirm → repeat until the human says export → `export-workflow`.
+whichever primitive makes the smallest targeted change (using contextual
+node identification, not bare ids, when a workflow has repeated
+structurally-similar families) → re-describe/confirm → repeat until the
+human says export → `export-workflow`.
+
+**Hard rule: the agent only ever calls CLI primitives over Bash, never
+edits `workflow.json` directly.** Enforced at the tool-permission level,
+not just by instruction: this agent's tool list is **Read, Bash, Glob —
+deliberately no Write**. Every mutation, however small, goes through
+`set-workflow-field`/`set-workflow-raw`/`rewire-workflow-link`/
+`remove-workflow-node`, so every mutation is validated and logged (see
+"Atomicity and the mutation log") no matter which agent turn produced
+it. This is the same reasoning that already led this project to have
+Director/Storyboard read `templates/<id>/template.json` directly rather
+than inventing Bash access they don't have — here it runs the other
+direction: the capability exists, and is deliberately withheld, so that
+"fuzzy LLM judgment" and "proven-safe graph mutation" stay on opposite
+sides of a hard, tool-enforced boundary rather than a boundary that only
+holds as long as the agent's instructions are followed correctly.
 
 ## Golden fixture
 
@@ -327,9 +457,22 @@ chains, dict-shaped `widgets_values`, a converted-widget-to-input node,
 I/O nodes, a couple of genuinely unrecognized custom types, `Note`
 nodes, realistic cross-stage connections) with synthetic prompt text,
 node content, and note text — no real video title, URL, or personal
-note text is ever committed. A small ~6-node fixture
-(Checkpoint→CLIP→KSampler→VAE) also exists for fast, focused unit
-tests.
+note text is ever committed. Additionally includes **two independent,
+structurally-identical role-family chains** (e.g. two separate
+`LivePortraitCropper → LivePortraitRetargeting → LivePortraitComposite`
+sequences fed by two different upstream sources) specifically to
+exercise contextual node identification — a test that asserts the tool
+can distinguish "the LivePortrait chain fed by node X" from "the one fed
+by node Y" using resolved neighbors, not node id. A small ~6-node
+fixture (Checkpoint→CLIP→KSampler→VAE) also exists for fast, focused
+unit tests.
+
+Before this feature is considered done, `import-workflow`/
+`describe-workflow` should also be manually smoke-tested against a
+handful of additional real, non-fixture community workflows (downloaded
+separately, never committed to the repo) — the golden fixture is
+thorough but is still one graph shape; real-world variety is the actual
+target.
 
 ## Testing
 
@@ -339,13 +482,35 @@ tests.
 - Each mutation primitive: prompt-text change, reference-image swap,
   LoRA removal with bypass, link rewire swapping a loader, a raw
   index/key edit — each checked for minimal unrelated change.
+- Unknown-node mutation: removing an unrecognized/unclassified node
+  succeeds; `--bypass` on one only auto-reconnects when its in/out
+  socket types are unambiguous, otherwise leaves a reported gap, same
+  as a known node — bypass eligibility depends on socket types, which
+  every node declares, not on Layer A/B classification.
+- Widget-schema mismatch: a Layer B node whose actual instance doesn't
+  match its registered widget schema (simulating a version drift)
+  returns the explicit `schema mismatch` error, never a silently wrong
+  write.
+- `set-workflow-raw` without a prior confirmation step is exercised at
+  the agent-instruction level, not the CLI level — the CLI command
+  itself has no concept of "confirmed," by design (see "Three mutation
+  primitives"); this is a documentation/agent-doc concern, not a
+  Python test.
+- Atomicity: a mutation that fails `validate_workflow` leaves the
+  stored `workflow.json` byte-identical to before the call; a
+  successful mutation's log entry appears at
+  `99_logs/workflow_<id>/`.
 - `validate_workflow`: dangling link and type-mismatched rewire are
-  errors and block; unknown node type and unresolvable bundler node are
-  warnings and never block.
+  Level 1 errors and block; an out-of-range value on a Level 2 Layer B
+  field is rejected; unknown node type and unresolvable bundler node
+  are warnings and never block.
 - `describe-workflow`/`list-workflow-nodes` against the golden fixture:
   correct role grouping (including multi-node families reading as one
   stage), correct type+count compression in the summary view vs. full
-  detail in the list view, notes surfaced verbatim.
+  detail in the list view, notes surfaced verbatim, `resolution: direct`
+  vs. `resolution: opaque_passthrough` tagged correctly across a
+  `Reroute` chain vs. a Crystools-style bundler, and the two-duplicate-
+  family fixture case correctly distinguishable via resolved neighbors.
 - Full CLI wiring for all 9 commands.
 - Existing test suite stays green throughout — this feature touches no
   existing module's behavior.
