@@ -252,7 +252,7 @@ Two related risks the mutation architecture must not leave open:
 `set-workflow-raw`, `rewire-workflow-link`, `remove-workflow-node`)
 loads the stored workflow, applies its one edit **in memory**, runs
 `validate_workflow`, and only writes to
-`assets/workflows/<id>/workflow.json` if there are no errors. On
+`workflows/<id>/workflow.json` if there are no errors. On
 failure, the command exits non-zero and the file on disk is untouched —
 every single mutation call is atomic by construction, not by a
 separate rollback step.
@@ -265,9 +265,16 @@ real future value but unnecessary complexity for V1 — instead, each
 call is atomic individually and applied sequentially, and every
 mutation call appends one entry to a workflow-scoped log via the
 existing `write_attempt_log` mechanism already used elsewhere in this
-codebase (e.g. `candidate_service.py`'s selection provenance logging),
-at `99_logs/workflow_<id>/`: which primitive ran, its arguments, and a
-before/after summary. If step 2 of 3 fails, steps 1 and 2's log entries
+codebase (e.g. `candidate_service.py`'s selection provenance logging).
+Since a workflow isn't project-scoped (see "Storage" below), the log
+lives inside the workflow's own self-contained directory —
+`write_attempt_log`'s first parameter is just a base directory it
+doesn't otherwise interpret, so calling it with
+`workflows/<workflow_id>/` as that base and a fixed group name produces
+`workflows/<workflow_id>/99_logs/mutations/<timestamp>_<primitive>_attempt01.json`
+— which primitive ran, its arguments, and a before/after summary, kept
+right next to that workflow's own `workflow.json` rather than under an
+ambiguous shared top-level log directory. If step 2 of 3 fails, steps 1 and 2's log entries
 already show exactly what's applied — the agent reads this log to
 report precisely what succeeded before reporting the failure and asking
 the human how to proceed (undo via more conversation, or continue from
@@ -385,14 +392,19 @@ human would trace wires on the canvas. Never by id alone.
 
 ## Storage
 
-`assets/workflows/<workflow_id>/workflow.json` — mirrors the
-character/environment asset layout. **Not project-scoped** (no
-`--path`), same convention as the Template Library: a workflow is a
-reusable, shareable asset, not tied to one project's shots.
-`<workflow_id>` is validated against the same `^[a-z0-9][a-z0-9-]*$`
-pattern already used for template ids in `schema.py` — reusing that
-constraint closes the same path-traversal class of bug the template
-feature had to fix, instead of reintroducing it.
+`workflows/<workflow_id>/workflow.json` — a CWD-relative top-level
+directory, exactly like `templates/` (`DEFAULT_TEMPLATES_PATH` in
+`cli.py`), not `assets/workflows/`: `assets/` is always inside a
+specific project (one of `project.py`'s `PROJECT_DIRS`), so nesting
+under it would make workflows project-scoped by construction — the
+opposite of the intent. **Not project-scoped** (no `--path`; a
+`--workflows-dir` override exists, mirroring `--templates-dir`): a
+workflow is a reusable, shareable asset, not tied to one project's
+shots. `<workflow_id>` is validated against the same
+`^[a-z0-9][a-z0-9-]*$` pattern already used for template ids in
+`schema.py` — reusing that constraint closes the same path-traversal
+class of bug the template feature had to fix, instead of reintroducing
+it.
 
 ## CLI commands
 
@@ -400,7 +412,7 @@ All in `src/ai_film/cli.py`, none project-scoped:
 
 - `import-workflow <file> --id <id>` — parse, reject clearly on
   API-format or the rare v1.0 schema shape, run `validate_workflow`
-  (warnings OK, errors block), copy into `assets/workflows/<id>/`.
+  (warnings OK, errors block), copy into `workflows/<id>/`.
 - `describe-workflow --id <id>` — compressed, human-facing summary:
   role-tagged nodes grouped by role, unlabeled nodes grouped by
   type+count (never enumerated individually for a large graph), notes
@@ -499,7 +511,7 @@ target.
 - Atomicity: a mutation that fails `validate_workflow` leaves the
   stored `workflow.json` byte-identical to before the call; a
   successful mutation's log entry appears at
-  `99_logs/workflow_<id>/`.
+  `workflows/<id>/99_logs/mutations/`.
 - `validate_workflow`: dangling link and type-mismatched rewire are
   Level 1 errors and block; an out-of-range value on a Level 2 Layer B
   field is rejected; unknown node type and unresolvable bundler node
