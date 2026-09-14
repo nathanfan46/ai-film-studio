@@ -22,7 +22,8 @@ def describe_workflow(workflow: dict) -> dict:
     for node in workflow["nodes"]:
         role = infer_role(node["type"])
         if node["type"] == "Note":
-            text = node.get("widgets_values", [""])[0]
+            values = node.get("widgets_values")
+            text = values[0] if values else ""
             notes.append({"id": node["id"], "text": text})
             continue
         if role is None:

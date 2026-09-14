@@ -34,6 +34,17 @@ def test_describe_surfaces_notes_verbatim():
     assert result["notes"] == [{"id": 5, "text": "a generic author note"}]
 
 
+def test_describe_handles_note_with_empty_widgets_values():
+    workflow = {
+        "nodes": [
+            {"id": 6, "type": "Note", "properties": {"text": ""}, "widgets_values": []},
+        ],
+        "links": [],
+    }
+    result = describe_workflow(workflow)
+    assert result["notes"] == [{"id": 6, "text": ""}]
+
+
 def test_list_workflow_nodes_includes_resolved_inputs():
     nodes = list_workflow_nodes(_workflow())
     ksampler = next(n for n in nodes if n["id"] == 2)
