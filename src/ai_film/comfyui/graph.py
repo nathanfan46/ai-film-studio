@@ -39,6 +39,8 @@ def resolve_input_source(workflow: dict, node_id: int, input_name: str) -> dict:
     link_id = input_entry["link"]
     for _ in range(_MAX_REROUTE_HOPS):
         link = _find_link(workflow, link_id)
+        if link is None:
+            return {"resolution": "none"}
         origin_id, origin_slot = link[1], link[2]
         origin_node = find_node(workflow, origin_id)
         output = origin_node["outputs"][origin_slot]

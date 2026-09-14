@@ -46,6 +46,11 @@ def test_nonexistent_node_id_returns_none_resolution_instead_of_raising():
     assert resolve_input_source(workflow, 999, "model") == {"resolution": "none"}
 
 
+def test_nonexistent_link_id_returns_none_resolution_instead_of_raising():
+    workflow = {"nodes": [{"id": 1, "type": "KSampler", "inputs": [{"name": "model", "type": "MODEL", "link": 999}]}], "links": []}
+    assert resolve_input_source(workflow, 1, "model") == {"resolution": "none"}
+
+
 def test_wildcard_typed_output_stops_at_opaque_passthrough():
     workflow = {
         "nodes": [
