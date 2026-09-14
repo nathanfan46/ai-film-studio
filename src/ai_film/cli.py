@@ -72,6 +72,17 @@ from ai_film.shot_store import (
     previous_shot_image_reference,
     save_shot,
 )
+from ai_film.comfyui.describe import describe_workflow, list_workflow_nodes
+from ai_film.services.workflow_service import (
+    export_workflow as export_workflow_service,
+    import_workflow as import_workflow_service,
+    remove_workflow_node_service,
+    rewire_workflow_link_service,
+    set_workflow_field_service,
+    set_workflow_raw_service,
+)
+from ai_film.comfyui.validate import validate_workflow as validate_workflow_service
+from ai_film.services.workflow_service import load_stored_workflow
 
 def _load_env_file() -> None:
     """Load a `.env` file (e.g. FAL_KEY) from the current working directory
@@ -87,6 +98,21 @@ app = typer.Typer(name="ai-film", help="AI Film Studio production engine.")
 
 DEFAULT_PROJECT_PATH = Path("project")
 DEFAULT_TEMPLATES_PATH = Path("templates")
+DEFAULT_WORKFLOWS_PATH = Path("workflows")
+
+
+def _coerce_cli_value(raw: str):
+    if raw.lower() in ("true", "false"):
+        return raw.lower() == "true"
+    try:
+        return int(raw)
+    except ValueError:
+        pass
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    return raw
 
 
 @app.command()
@@ -1045,6 +1071,170 @@ def import_template_cmd(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
     typer.echo(f"imported {result['id']} -> {templates_dir / result['id'] / 'template.json'}")
+
+
+@app.command(name="import-workflow")
+def import_workflow_cmd(
+    file: Path = typer.Argument(...),
+    id: str = typer.Option(..., "--id"),
+    workflows_dir: Path = typer.Option(DEFAULT_WORKFLOWS_PATH, "--workflows-dir"),
+) -> None:
+    """Import a ComfyUI workflow JSON file (legacy workflow shape only)."""
+    try:
+        result = import_workflow_service(workflows_dir, file, id)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"imported {id}")
+    for warning in result["warnings"]:
+        typer.echo(f"  warning: {warning}")
+
+
+@app.command(name="describe-workflow")
+def describe_workflow_cmd(
+    id: str = typer.Option(..., "--id"),
+    workflows_dir: Path = typer.Option(DEFAULT_WORKFLOWS_PATH, "--workflows-dir"),
+) -> None:
+    """Compressed, human-facing summary of an imported workflow."""
+    try:
+        workflow = load_stored_workflow(workflows_dir, id)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    description = describe_workflow(workflow)
+    for role, nodes in description["by_role"].items():
+        typer.echo(f"{role}: " + ", ".join(f"{n['type']}#{n['id']}" for n in nodes))
+    for node_type, count in description["unclassified"].items():
+        typer.echo(f"unclassified: {node_type} x{count}")
+    for note in description["notes"]:
+        typer.echo(f"note #{note['id']}: {note['text']}")
+
+
+@app.command(name="list-workflow-nodes")
+def list_workflow_nodes_cmd(
+    id: str = typer.Option(..., "--id"),
+    role: str = typer.Option(None, "--role"),
+    workflows_dir: Path = typer.Option(DEFAULT_WORKFLOWS_PATH, "--workflows-dir"),
+) -> None:
+    """Full, uncompressed per-node detail, optionally filtered by role."""
+    try:
+        workflow = load_stored_workflow(workflows_dir, id)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    for node in list_workflow_nodes(workflow, role=role):
+        typer.echo(f"#{node['id']} {node['type']} (role={node['role']})")
+        for inp in node["inputs"]:
+            typer.echo(f"  {inp['name']} <- {inp['resolution']} node {inp.get('source_node_id')}")
+
+
+@app.command(name="set-workflow-field")
+def set_workflow_field_cmd(
+    id: str = typer.Option(..., "--id"),
+    node: int = typer.Option(..., "--node"),
+    field: str = typer.Option(..., "--field"),
+    value: str = typer.Option(..., "--value"),
+    workflows_dir: Path = typer.Option(DEFAULT_WORKFLOWS_PATH, "--workflows-dir"),
+) -> None:
+    """Set a Layer B semantic field on a known node type."""
+    try:
+        result = set_workflow_field_service(workflows_dir, id, node, field, _coerce_cli_value(value))
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(result["summary"])
+
+
+@app.command(name="set-workflow-raw")
+def set_workflow_raw_cmd(
+    id: str = typer.Option(..., "--id"),
+    node: int = typer.Option(..., "--node"),
+    value: str = typer.Option(..., "--value"),
+    index: int = typer.Option(None, "--index"),
+    key: str = typer.Option(None, "--key"),
+    workflows_dir: Path = typer.Option(DEFAULT_WORKFLOWS_PATH, "--workflows-dir"),
+) -> None:
+    """Explicit raw widgets_values index/key write -- escape hatch for anything
+    outside the known-node registry. Requires human confirmation at the agent
+    layer before use; the CLI itself has no concept of "confirmed"."""
+    try:
+        result = set_workflow_raw_service(workflows_dir, id, node, _coerce_cli_value(value), index=index, key=key)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(result["summary"])
+
+
+@app.command(name="rewire-workflow-link")
+def rewire_workflow_link_cmd(
+    id: str = typer.Option(..., "--id"),
+    target_node: int = typer.Option(..., "--target-node"),
+    target_input: str = typer.Option(..., "--target-input"),
+    source_node: int = typer.Option(..., "--source-node"),
+    source_output: str = typer.Option(..., "--source-output"),
+    workflows_dir: Path = typer.Option(DEFAULT_WORKFLOWS_PATH, "--workflows-dir"),
+) -> None:
+    """Point a target node's input at a different source node's output."""
+    try:
+        result = rewire_workflow_link_service(workflows_dir, id, target_node, target_input, source_node, source_output)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(result["summary"])
+
+
+@app.command(name="remove-workflow-node")
+def remove_workflow_node_cmd(
+    id: str = typer.Option(..., "--id"),
+    node: int = typer.Option(..., "--node"),
+    bypass: bool = typer.Option(False, "--bypass"),
+    workflows_dir: Path = typer.Option(DEFAULT_WORKFLOWS_PATH, "--workflows-dir"),
+) -> None:
+    """Remove a node, optionally bypass-reconnecting around it."""
+    try:
+        result = remove_workflow_node_service(workflows_dir, id, node, bypass=bypass)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(result["summary"])
+
+
+@app.command(name="validate-workflow")
+def validate_workflow_cmd(
+    id: str = typer.Option(..., "--id"),
+    workflows_dir: Path = typer.Option(DEFAULT_WORKFLOWS_PATH, "--workflows-dir"),
+) -> None:
+    """Standalone structural validation -- the same check every mutation and export runs."""
+    try:
+        workflow = load_stored_workflow(workflows_dir, id)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    result = validate_workflow_service(workflow)
+    for warning in result["warnings"]:
+        typer.echo(f"warning: {warning}")
+    if result["errors"]:
+        for error in result["errors"]:
+            typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo("valid")
+
+
+@app.command(name="export-workflow")
+def export_workflow_cmd(
+    id: str = typer.Option(..., "--id"),
+    out: Path = typer.Option(..., "--out"),
+    workflows_dir: Path = typer.Option(DEFAULT_WORKFLOWS_PATH, "--workflows-dir"),
+) -> None:
+    """Validate and write the current workflow out to a ComfyUI-loadable file."""
+    try:
+        result = export_workflow_service(workflows_dir, id, out)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"exported to {out}")
+    for warning in result["warnings"]:
+        typer.echo(f"  warning: {warning}")
 
 
 @app.command(name="review-media")
