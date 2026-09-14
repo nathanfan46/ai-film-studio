@@ -56,6 +56,17 @@ def test_unclassified_node_is_a_warning_not_an_error():
     assert any("3" in w for w in result["warnings"])
 
 
+def test_link_with_nonexistent_origin_node_is_reported_cleanly_not_a_crash():
+    workflow = {
+        "nodes": [{"id": 2, "type": "KSampler",
+                   "inputs": [{"name": "model", "type": "MODEL", "link": 1}],
+                   "widgets_values": [1, "fixed", 20, 8.0, "euler", "normal", 1]}],
+        "links": [[1, 999, 0, 2, 0, "MODEL"]],  # origin_id 999 does not exist
+    }
+    result = validate_workflow(workflow)
+    assert any("999" in e for e in result["errors"])
+
+
 def test_opaque_passthrough_link_is_a_warning():
     workflow = _minimal_valid_workflow()
     workflow["nodes"].append({

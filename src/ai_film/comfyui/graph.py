@@ -43,6 +43,8 @@ def resolve_input_source(workflow: dict, node_id: int, input_name: str) -> dict:
             return {"resolution": "none"}
         origin_id, origin_slot = link[1], link[2]
         origin_node = find_node(workflow, origin_id)
+        if origin_node is None:
+            return {"resolution": "none"}
         output = origin_node["outputs"][origin_slot]
 
         if origin_node["type"] == "Reroute":
