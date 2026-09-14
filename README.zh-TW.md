@@ -317,6 +317,22 @@ ai-film apply-audio-offset --shot S01_SH01 --track voice --offset-ms 400 --path 
 ai-film review-media --shot S01_SH01 --path ~/my-film
 ```
 
+## ComfyUI workflow 整合
+
+匯入一份 ComfyUI workflow，用 `ai-film-workflow` agent 以自然語言討論並修改它，再匯出一份 ComfyUI 可以載入的結果。獨立運作——不需要既有的 ai-film-studio 專案。
+
+```bash
+/import-workflow ~/Downloads/someone-elses-workflow.json
+```
+
+背後用到的指令：`import-workflow`／`describe-workflow`／`list-workflow-nodes`／`set-workflow-field`／
+`set-workflow-raw`／`rewire-workflow-link`／`remove-workflow-node`／`validate-workflow`／
+`export-workflow`，全部都不綁定特定專案（`--workflows-dir`，預設為 `workflows/`，對應
+`--templates-dir` 的做法）。完整設計請見
+`docs/superpowers/specs/2026-09-11-comfyui-workflow-interop-design.md`——值得一提的是，這個
+工具從不假裝自己理解每一種 ComfyUI node；無法辨識的 node 會被原封不動保留下來，即使不理解
+其內部邏輯，仍然可以透過型別安全的圖形手術（重新接線、移除／繞過 node）來修改它們。
+
 ## 一眼看懂整部片的製作狀況
 
 ```bash

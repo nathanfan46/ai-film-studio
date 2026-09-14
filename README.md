@@ -331,6 +331,16 @@ ai-film apply-audio-offset --shot S01_SH01 --track voice --offset-ms 400 --path 
 ai-film review-media --shot S01_SH01 --path ~/my-film
 ```
 
+## ComfyUI workflow interop
+
+Import a ComfyUI workflow, discuss and modify it with the `ai-film-workflow` agent in natural language, and export a result ComfyUI can load. Standalone -- no ai-film-studio project required.
+
+```bash
+/import-workflow ~/Downloads/someone-elses-workflow.json
+```
+
+Under the hood: `import-workflow`/`describe-workflow`/`list-workflow-nodes`/`set-workflow-field`/`set-workflow-raw`/`rewire-workflow-link`/`remove-workflow-node`/`validate-workflow`/`export-workflow`, all non-project-scoped (`--workflows-dir`, default `workflows/`, mirroring `--templates-dir`). See `docs/superpowers/specs/2026-09-11-comfyui-workflow-interop-design.md` for the full design -- notably, the tool never claims to understand every ComfyUI node; unrecognized nodes are preserved exactly and are still modifiable via type-safe graph surgery (rewiring links, removing/bypassing nodes) even without semantic understanding of their internals.
+
 ## Whole-project status at a glance
 
 ```bash
