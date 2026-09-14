@@ -21,7 +21,6 @@
           "name": "MODEL",
           "type": "MODEL",
           "links": [
-            1,
             10,
             22
           ],
@@ -179,7 +178,7 @@
         {
           "name": "model",
           "type": "MODEL",
-          "link": 1
+          "link": 13
         },
         {
           "name": "positive",
@@ -711,36 +710,6 @@
       ]
     },
     {
-      "id": 19,
-      "type": "DownloadAndLoadLivePortraitModels",
-      "pos": [
-        300,
-        1150
-      ],
-      "size": [
-        300,
-        100
-      ],
-      "flags": {},
-      "order": 18,
-      "mode": 0,
-      "outputs": [
-        {
-          "name": "LIVEPORTRAITPIPE",
-          "type": "LIVEPORTRAITPIPE",
-          "links": [],
-          "slot_index": 0
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "DownloadAndLoadLivePortraitModels"
-      },
-      "widgets_values": [
-        "auto",
-        "fp16"
-      ]
-    },
-    {
       "id": 20,
       "type": "LivePortraitCropper",
       "pos": [
@@ -763,7 +732,7 @@
         {
           "name": "model",
           "type": "MODEL",
-          "link": 13
+          "link": null
         }
       ],
       "outputs": [
@@ -1824,14 +1793,6 @@
   ],
   "links": [
     [
-      1,
-      1,
-      0,
-      5,
-      0,
-      "MODEL"
-    ],
-    [
       2,
       1,
       1,
@@ -1923,8 +1884,8 @@
       13,
       9,
       0,
-      20,
-      1,
+      5,
+      0,
       "MODEL"
     ],
     [
