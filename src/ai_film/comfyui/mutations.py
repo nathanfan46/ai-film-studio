@@ -78,7 +78,7 @@ def _remove_link(workflow: dict, link_id: int) -> None:
     _, origin_id, origin_slot, target_id, target_slot, _ = link
     workflow["links"] = [l for l in workflow["links"] if l[0] != link_id]
     origin_node = find_node(workflow, origin_id)
-    if origin_node is not None:
+    if origin_node is not None and origin_slot < len(origin_node.get("outputs", [])):
         origin_node["outputs"][origin_slot]["links"] = [
             lid for lid in origin_node["outputs"][origin_slot].get("links") or [] if lid != link_id
         ]
@@ -166,10 +166,17 @@ def remove_workflow_node(workflow: dict, node_id: int, bypass: bool = False) -> 
         if in_link is not None:
             bypass_source = (in_link[1], in_link[2])
             link_type = node["outputs"][out_slot]["type"]
-            for out_link_id in node["outputs"][out_slot].get("links") or []:
-                out_link = next((l for l in workflow["links"] if l[0] == out_link_id), None)
-                if out_link is not None:
-                    bypass_targets.append((out_link[3], out_link[4]))
+            # Derive downstream targets from workflow["links"] (ground truth),
+            # not from node["outputs"][out_slot]["links"] -- that per-node
+            # bookkeeping list can under-report relative to the actual links
+            # array (the same way touching_link_ids below never trusts it
+            # either). Trusting the stale list here would let a live link
+            # get destroyed by the touching_link_ids sweep further down
+            # without ever being reconnected -- silent data loss instead of
+            # a declined bypass.
+            bypass_targets = [
+                (l[3], l[4]) for l in workflow["links"] if l[1] == node_id and l[2] == out_slot
+            ]
 
     touching_link_ids = {
         l[0] for l in workflow["links"] if l[1] == node_id or l[3] == node_id

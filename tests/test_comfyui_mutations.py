@@ -189,13 +189,82 @@ def test_remove_bypass_handles_dangling_input_link_without_crashing():
     assert "removed node 2" in summary
 
 
-def test_remove_bypass_pair_exists_but_output_has_no_downstream_links():
-    # The removed node has an unambiguous type-matching pair, but its
-    # matched output has no downstream links to reconnect -- must not
-    # crash and must not claim "no unambiguous pair" in the summary.
+def test_remove_bypass_reconnects_even_when_output_bookkeeping_under_reports():
+    # The removed node's own outputs[].links bookkeeping claims no downstream
+    # links, but workflow["links"] (ground truth) still contains a real link
+    # sourced from that node/slot. Bypass-target enumeration must derive from
+    # ground truth, the same way touching_link_ids already does -- trusting
+    # the stale per-node list here would let the touching_link_ids sweep
+    # destroy the real link while bypass never reconnects it: silent data
+    # loss, worse than a crash.
     workflow = _bypass_workflow()
     node = next(n for n in workflow["nodes"] if n["id"] == 2)
-    node["outputs"][0]["links"] = []
+    node["outputs"][0]["links"] = []  # stale/under-reporting bookkeeping
     summary = remove_workflow_node(workflow, 2, bypass=True)
     assert not any(n["id"] == 2 for n in workflow["nodes"])
-    assert "no unambiguous" not in summary.lower()
+    target = next(n for n in workflow["nodes"] if n["id"] == 3)
+    new_link_id = target["inputs"][0]["link"]
+    assert new_link_id is not None  # must NOT have been silently dropped
+    new_link = next(l for l in workflow["links"] if l[0] == new_link_id)
+    assert new_link[1:5] == [1, 0, 3, 0]
+    assert "bypassed" in summary.lower()
+
+
+def _bypass_workflow_no_consumer():
+    # A node with a valid, unambiguous bypass pair whose matched output
+    # genuinely has zero downstream links -- both in its own bookkeeping
+    # AND in workflow["links"] (ground truth). Distinct from the
+    # under-reporting-bookkeeping scenario above.
+    return {
+        "last_link_id": 1,
+        "nodes": [
+            {"id": 1, "type": "CheckpointLoaderSimple",
+             "outputs": [{"name": "MODEL", "type": "MODEL", "links": [1]}]},
+            {"id": 2, "type": "LoraLoaderModelOnly",
+             "inputs": [{"name": "model", "type": "MODEL", "link": 1}],
+             "outputs": [{"name": "MODEL", "type": "MODEL", "links": []}],
+             "widgets_values": ["x.safetensors", 1.0]},
+        ],
+        "links": [[1, 1, 0, 2, 0, "MODEL"]],
+    }
+
+
+def test_remove_bypass_reports_nothing_to_bypass_when_genuinely_no_downstream_links():
+    workflow = _bypass_workflow_no_consumer()
+    summary = remove_workflow_node(workflow, 2, bypass=True)
+    assert not any(n["id"] == 2 for n in workflow["nodes"])
+    assert "no unambiguous" not in summary.lower()  # there WAS a valid pair
+    assert "nothing to bypass" in summary.lower()
+
+
+def test_remove_node_handles_out_of_range_origin_slot_without_crashing():
+    # A link record whose origin_slot exceeds the origin node's current
+    # outputs length must not raise an unguarded IndexError in _remove_link.
+    workflow = {
+        "last_link_id": 1,
+        "nodes": [
+            {"id": 1, "type": "SomeNode", "outputs": [{"name": "MODEL", "type": "MODEL", "links": [1]}]},
+            {"id": 2, "type": "KSampler", "inputs": [{"name": "model", "type": "MODEL", "link": 1}]},
+        ],
+        "links": [[1, 1, 5, 2, 0, "MODEL"]],  # origin_slot 5, but node 1 only has slot 0
+    }
+    remove_workflow_node(workflow, 2, bypass=False)
+    assert not any(n["id"] == 2 for n in workflow["nodes"])
+
+
+def test_rewire_handles_out_of_range_origin_slot_on_old_link_without_crashing():
+    # Rewiring away from a target input whose old link has an out-of-range
+    # origin_slot must not crash inside _remove_link's cleanup of the old link.
+    workflow = {
+        "last_link_id": 2,
+        "nodes": [
+            {"id": 1, "type": "SomeNode", "outputs": [{"name": "MODEL", "type": "MODEL", "links": [1]}]},
+            {"id": 2, "type": "CheckpointLoaderSimple", "outputs": [{"name": "MODEL", "type": "MODEL", "links": []}]},
+            {"id": 3, "type": "KSampler", "inputs": [{"name": "model", "type": "MODEL", "link": 1}]},
+        ],
+        "links": [[1, 1, 5, 3, 0, "MODEL"]],  # origin_slot 5, but node 1 only has slot 0
+    }
+    rewire_workflow_link(workflow, target_node_id=3, target_input="model",
+                          source_node_id=2, source_output="MODEL")
+    target = next(n for n in workflow["nodes"] if n["id"] == 3)
+    assert target["inputs"][0]["link"] != 1
