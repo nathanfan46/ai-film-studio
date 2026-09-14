@@ -1,12 +1,35 @@
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
-from ai_film.cli import app
+from ai_film.cli import _coerce_cli_value, app
 
 runner = CliRunner()
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+@pytest.mark.parametrize("raw", ["NaN", "nan", "inf", "Inf", "-inf", "Infinity", "+INFINITY"])
+def test_coerce_cli_value_rejects_non_finite_float_tokens(raw):
+    # Python's float() happily parses "NaN"/"inf"/"Infinity" (case-insensitive,
+    # with optional sign) into non-finite floats. _coerce_cli_value exists to
+    # protect typed ComfyUI widget values from silent corruption, so a literal
+    # string value like "NaN" (e.g. someone's seed label, or a text field that
+    # happens to contain that word) must round-trip as the string "NaN", not
+    # silently become float('nan') -- which also produces non-standard
+    # `NaN`/`Infinity` tokens when re-serialized to JSON via json.dumps.
+    assert _coerce_cli_value(raw) == raw
+
+
+def test_coerce_cli_value_still_converts_valid_numeric_and_bool_cases():
+    assert _coerce_cli_value("30") == 30
+    assert isinstance(_coerce_cli_value("30"), int)
+    assert _coerce_cli_value("3.14") == 3.14
+    assert isinstance(_coerce_cli_value("3.14"), float)
+    assert _coerce_cli_value("true") is True
+    assert _coerce_cli_value("false") is False
+    assert _coerce_cli_value("512.safetensors") == "512.safetensors"
 
 
 def test_import_then_describe_then_export(tmp_path):

@@ -101,6 +101,11 @@ DEFAULT_TEMPLATES_PATH = Path("templates")
 DEFAULT_WORKFLOWS_PATH = Path("workflows")
 
 
+_NON_FINITE_FLOAT_TOKENS = (
+    "nan", "inf", "-inf", "+inf", "infinity", "-infinity", "+infinity",
+)
+
+
 def _coerce_cli_value(raw: str):
     if raw.lower() in ("true", "false"):
         return raw.lower() == "true"
@@ -108,10 +113,11 @@ def _coerce_cli_value(raw: str):
         return int(raw)
     except ValueError:
         pass
-    try:
-        return float(raw)
-    except ValueError:
-        pass
+    if raw.strip().lower() not in _NON_FINITE_FLOAT_TOKENS:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
     return raw
 
 
