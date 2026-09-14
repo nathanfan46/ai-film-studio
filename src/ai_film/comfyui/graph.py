@@ -29,6 +29,8 @@ def _find_link(workflow: dict, link_id: int) -> list | None:
 
 def resolve_input_source(workflow: dict, node_id: int, input_name: str) -> dict:
     node = find_node(workflow, node_id)
+    if node is None:
+        return {"resolution": "none"}
     matching_inputs = [i for i in node.get("inputs", []) if i["name"] == input_name]
     input_entry = matching_inputs[0] if matching_inputs else None
     if input_entry is None or input_entry.get("link") is None:
