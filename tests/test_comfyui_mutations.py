@@ -64,3 +64,19 @@ def test_set_workflow_raw_requires_exactly_one_of_index_or_key():
         set_workflow_raw(workflow, 99, "x")
     with pytest.raises(ValueError, match="exactly one"):
         set_workflow_raw(workflow, 99, "x", index=0, key="video")
+
+
+def test_set_workflow_raw_rejects_out_of_range_index_never_a_silent_wrong_write():
+    workflow = _ksampler_workflow()
+    node = next(n for n in workflow["nodes"] if n["id"] == 99)
+    with pytest.raises(ValueError, match="no widgets_values index"):
+        set_workflow_raw(workflow, 99, "x", index=10)
+    assert node["widgets_values"] == [1, 2, 3]  # untouched, no IndexError leaked
+
+
+def test_set_workflow_raw_rejects_nonexistent_dict_key_never_a_phantom_write():
+    workflow = {"nodes": [{"id": 41, "type": "VHS_LoadVideo", "widgets_values": {"video": "old.mp4"}}], "links": []}
+    node = next(n for n in workflow["nodes"] if n["id"] == 41)
+    with pytest.raises(ValueError, match="no widgets_values key"):
+        set_workflow_raw(workflow, 41, "b.mp4", key="typo_key")
+    assert node["widgets_values"] == {"video": "old.mp4"}  # untouched, no phantom key, no KeyError leaked

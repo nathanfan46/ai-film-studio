@@ -49,8 +49,16 @@ def set_workflow_raw(workflow: dict, node_id: int, value, index: int | None = No
     if node is None:
         raise ValueError(f"no node with id {node_id}")
 
+    widgets = node.get("widgets_values")
     if index is not None:
-        node["widgets_values"][index] = value
+        if not isinstance(widgets, list) or not (0 <= index < len(widgets)):
+            found = len(widgets) if isinstance(widgets, list) else "a non-array widgets_values"
+            raise ValueError(f"node {node_id} ({node['type']}) has no widgets_values index {index} (found {found})")
+        widgets[index] = value
         return f"set node {node_id} ({node['type']}).widgets_values[{index}] = {value!r} (raw)"
-    node["widgets_values"][key] = value
+
+    if not isinstance(widgets, dict) or key not in widgets:
+        found = list(widgets) if isinstance(widgets, dict) else "a non-dict widgets_values"
+        raise ValueError(f"node {node_id} ({node['type']}) has no widgets_values key {key!r} (found keys: {found})")
+    widgets[key] = value
     return f"set node {node_id} ({node['type']}).widgets_values[{key!r}] = {value!r} (raw)"
