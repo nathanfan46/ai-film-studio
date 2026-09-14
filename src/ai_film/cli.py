@@ -1084,10 +1084,11 @@ def import_workflow_cmd(
     file: Path = typer.Argument(...),
     id: str = typer.Option(..., "--id"),
     workflows_dir: Path = typer.Option(DEFAULT_WORKFLOWS_PATH, "--workflows-dir"),
+    force: bool = typer.Option(False, "--force"),
 ) -> None:
     """Import a ComfyUI workflow JSON file (legacy workflow shape only)."""
     try:
-        result = import_workflow_service(workflows_dir, file, id)
+        result = import_workflow_service(workflows_dir, file, id, force=force)
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
@@ -1132,6 +1133,8 @@ def list_workflow_nodes_cmd(
         typer.echo(f"#{node['id']} {node['type']} (role={node['role']})")
         for inp in node["inputs"]:
             typer.echo(f"  {inp['name']} <- {inp['resolution']} node {inp.get('source_node_id')}")
+        for out in node["outputs"]:
+            typer.echo(f"  -> {out['name']} ({out['type']})")
 
 
 @app.command(name="set-workflow-field")
@@ -1140,11 +1143,16 @@ def set_workflow_field_cmd(
     node: int = typer.Option(..., "--node"),
     field: str = typer.Option(..., "--field"),
     value: str = typer.Option(..., "--value"),
+    raw_string: bool = typer.Option(
+        False, "--raw-string",
+        help="Skip numeric/bool coercion and pass --value through as the literal string typed.",
+    ),
     workflows_dir: Path = typer.Option(DEFAULT_WORKFLOWS_PATH, "--workflows-dir"),
 ) -> None:
     """Set a Layer B semantic field on a known node type."""
+    coerced_value = value if raw_string else _coerce_cli_value(value)
     try:
-        result = set_workflow_field_service(workflows_dir, id, node, field, _coerce_cli_value(value))
+        result = set_workflow_field_service(workflows_dir, id, node, field, coerced_value)
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
@@ -1158,13 +1166,18 @@ def set_workflow_raw_cmd(
     value: str = typer.Option(..., "--value"),
     index: int = typer.Option(None, "--index"),
     key: str = typer.Option(None, "--key"),
+    raw_string: bool = typer.Option(
+        False, "--raw-string",
+        help="Skip numeric/bool coercion and pass --value through as the literal string typed.",
+    ),
     workflows_dir: Path = typer.Option(DEFAULT_WORKFLOWS_PATH, "--workflows-dir"),
 ) -> None:
     """Explicit raw widgets_values index/key write -- escape hatch for anything
     outside the known-node registry. Requires human confirmation at the agent
     layer before use; the CLI itself has no concept of "confirmed"."""
+    coerced_value = value if raw_string else _coerce_cli_value(value)
     try:
-        result = set_workflow_raw_service(workflows_dir, id, node, _coerce_cli_value(value), index=index, key=key)
+        result = set_workflow_raw_service(workflows_dir, id, node, coerced_value, index=index, key=key)
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)

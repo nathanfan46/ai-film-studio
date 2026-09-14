@@ -178,6 +178,21 @@ def remove_workflow_node(workflow: dict, node_id: int, bypass: bool = False) -> 
                 (l[3], l[4]) for l in workflow["links"] if l[1] == node_id and l[2] == out_slot
             ]
 
+    # Downstream (target_node_id, target_input_name) pairs fed by links
+    # originating from this node -- computed from workflow["links"] (ground
+    # truth, same rationale as bypass_targets above) before anything is
+    # removed, so a non-bypassed (or bypass-declined) removal can name
+    # exactly what it's leaving disconnected instead of just gesturing at
+    # "a gap the agent must mention".
+    orphaned_inputs: list[tuple[int, str]] = []
+    for l in workflow["links"]:
+        if l[1] != node_id:
+            continue
+        target_id, target_slot = l[3], l[4]
+        target_node = find_node(workflow, target_id)
+        if target_node is not None and target_slot < len(target_node.get("inputs", [])):
+            orphaned_inputs.append((target_id, target_node["inputs"][target_slot]["name"]))
+
     touching_link_ids = {
         l[0] for l in workflow["links"] if l[1] == node_id or l[3] == node_id
     }
@@ -201,4 +216,9 @@ def remove_workflow_node(workflow: dict, node_id: int, bypass: bool = False) -> 
         suffix = " (did not bypass -- no unambiguous type-matching input/output pair)"
     else:
         suffix = ""
-    return f"removed node {node_id} ({node['type']}){suffix}"
+    disconnect_clause = ""
+    if orphaned_inputs:
+        disconnect_clause = "; left disconnected: " + ", ".join(
+            f"node {tid} input {tname!r}" for tid, tname in orphaned_inputs
+        )
+    return f"removed node {node_id} ({node['type']}){suffix}{disconnect_clause}"

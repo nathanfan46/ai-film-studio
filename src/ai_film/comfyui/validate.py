@@ -106,5 +106,14 @@ def validate_workflow(workflow: dict) -> dict:
     _validate_level_1(workflow, errors)
     _validate_level_2(workflow, errors, warnings)
     _validate_classification_warnings(workflow, warnings)
-    _validate_opaque_passthrough_warnings(workflow, warnings)
+    if not errors:
+        # A workflow that's already known structurally broken (Level 1) can
+        # contain the exact malformed shapes (out-of-range origin slots,
+        # empty-input Reroutes) that resolve_input_source is defended
+        # against but would otherwise be asked to walk here for no benefit
+        # -- there's no need to compute passthrough warnings for a workflow
+        # that's already going to be rejected. Skipping this pass when
+        # errors exist is a second layer of defense on top of graph.py's
+        # own guards, not a substitute for them.
+        _validate_opaque_passthrough_warnings(workflow, warnings)
     return {"errors": errors, "warnings": warnings}

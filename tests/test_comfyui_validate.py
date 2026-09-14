@@ -67,6 +67,41 @@ def test_link_with_nonexistent_origin_node_is_reported_cleanly_not_a_crash():
     assert any("999" in e for e in result["errors"])
 
 
+def test_out_of_range_origin_slot_is_reported_cleanly_not_a_crash():
+    # validate_workflow's Level 1 pass already detects an out-of-range
+    # origin_slot as an error -- but it used to then unconditionally run
+    # the opaque-passthrough warnings pass afterward, which called
+    # resolve_input_source on the same malformed link and crashed with an
+    # unguarded IndexError before the already-computed Level 1 error could
+    # ever reach the caller.
+    workflow = {
+        "nodes": [
+            {"id": 1, "type": "SomeNode", "outputs": [{"name": "MODEL", "type": "MODEL", "links": [1]}]},
+            {"id": 2, "type": "KSampler",
+             "inputs": [{"name": "model", "type": "MODEL", "link": 1}],
+             "widgets_values": [1, "fixed", 20, 8.0, "euler", "normal", 1]},
+        ],
+        "links": [[1, 1, 5, 2, 0, "MODEL"]],  # origin_slot 5, but node 1 only has slot 0
+    }
+    result = validate_workflow(workflow)
+    assert any("out of range" in e for e in result["errors"])
+
+
+def test_reroute_with_empty_inputs_in_validate_is_reported_cleanly_not_a_crash():
+    workflow = {
+        "nodes": [
+            {"id": 1, "type": "Reroute", "inputs": [],
+             "outputs": [{"name": "", "type": "MODEL", "links": [1]}]},
+            {"id": 2, "type": "KSampler",
+             "inputs": [{"name": "model", "type": "MODEL", "link": 1}],
+             "widgets_values": [1, "fixed", 20, 8.0, "euler", "normal", 1]},
+        ],
+        "links": [[1, 1, 0, 2, 0, "MODEL"]],
+    }
+    result = validate_workflow(workflow)  # must not raise
+    assert result["errors"] == []
+
+
 def test_opaque_passthrough_link_is_a_warning():
     workflow = _minimal_valid_workflow()
     workflow["nodes"].append({

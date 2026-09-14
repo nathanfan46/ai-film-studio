@@ -151,6 +151,34 @@ def test_remove_without_bypass_leaves_downstream_input_disconnected():
     assert target["inputs"][0]["link"] is None
 
 
+def test_remove_without_bypass_summary_names_the_disconnected_downstream_input():
+    # Fix 6: the summary used to just say "removed node 2 (...)" -- no
+    # mention of which downstream node/input is now disconnected as a
+    # result, leaving an agent nothing concrete to mention about the gap it
+    # just created. Node 2 in _bypass_workflow feeds node 3's "model" input.
+    workflow = _bypass_workflow()
+    summary = remove_workflow_node(workflow, 2, bypass=False)
+    assert "node 3" in summary
+    assert "'model'" in summary
+    assert "disconnected" in summary.lower()
+
+
+def test_remove_with_declined_bypass_also_names_the_disconnected_downstream_input():
+    workflow = _bypass_workflow()
+    # give the node a second, differently-typed output so bypass is declined
+    workflow["nodes"][1]["outputs"].append({"name": "EXTRA", "type": "EXTRA", "links": []})
+    summary = remove_workflow_node(workflow, 2, bypass=True)
+    assert "did not bypass" in summary.lower()
+    assert "node 3" in summary
+    assert "'model'" in summary
+
+
+def test_remove_node_with_no_downstream_consumers_omits_the_disconnected_clause():
+    workflow = _bypass_workflow_no_consumer()
+    summary = remove_workflow_node(workflow, 2, bypass=False)
+    assert "disconnected" not in summary.lower()
+
+
 def test_remove_bypass_declines_when_no_unambiguous_pair_exists():
     workflow = _bypass_workflow()
     # give the node a second, differently-typed output so there's no

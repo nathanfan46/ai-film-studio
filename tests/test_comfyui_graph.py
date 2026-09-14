@@ -59,6 +59,33 @@ def test_nonexistent_origin_node_returns_none_resolution_instead_of_raising():
     assert resolve_input_source(workflow, 2, "model") == {"resolution": "none"}
 
 
+def test_out_of_range_origin_slot_returns_none_resolution_instead_of_crashing():
+    # A link record whose origin_slot exceeds the origin node's actual
+    # outputs length must not raise an unguarded IndexError.
+    workflow = {
+        "nodes": [
+            {"id": 1, "type": "SomeNode", "outputs": [{"name": "MODEL", "type": "MODEL", "links": [1]}]},
+            {"id": 2, "type": "KSampler", "inputs": [{"name": "model", "type": "MODEL", "link": 1}]},
+        ],
+        "links": [[1, 1, 5, 2, 0, "MODEL"]],  # origin_slot 5, but node 1 only has slot 0
+    }
+    assert resolve_input_source(workflow, 2, "model") == {"resolution": "none"}
+
+
+def test_reroute_with_empty_inputs_returns_none_resolution_instead_of_crashing():
+    # A Reroute node with "inputs": [] (or missing entirely) must not raise
+    # an unguarded IndexError when the hop loop tries origin_node["inputs"][0].
+    workflow = {
+        "nodes": [
+            {"id": 1, "type": "Reroute", "inputs": [],
+             "outputs": [{"name": "", "type": "MODEL", "links": [1]}]},
+            {"id": 2, "type": "KSampler", "inputs": [{"name": "model", "type": "MODEL", "link": 1}]},
+        ],
+        "links": [[1, 1, 0, 2, 0, "MODEL"]],
+    }
+    assert resolve_input_source(workflow, 2, "model") == {"resolution": "none"}
+
+
 def test_wildcard_typed_output_stops_at_opaque_passthrough():
     workflow = {
         "nodes": [

@@ -39,8 +39,12 @@ def _write_workflow(workflows_dir: Path, workflow_id: str, workflow: dict) -> No
     path.write_text(json.dumps(workflow, indent=2, ensure_ascii=False))
 
 
-def import_workflow(workflows_dir: Path, file_path: Path, workflow_id: str) -> dict:
+def import_workflow(workflows_dir: Path, file_path: Path, workflow_id: str, force: bool = False) -> dict:
     _validate_workflow_id(workflow_id)
+    if _workflow_path(workflows_dir, workflow_id).exists() and not force:
+        raise ValueError(
+            f"a workflow with id {workflow_id!r} already exists -- pass --force to overwrite"
+        )
     workflow = load_workflow_json(file_path)
     result = validate_workflow(workflow)
     if result["errors"]:
@@ -50,6 +54,7 @@ def import_workflow(workflows_dir: Path, file_path: Path, workflow_id: str) -> d
 
 
 def load_stored_workflow(workflows_dir: Path, workflow_id: str) -> dict:
+    _validate_workflow_id(workflow_id)
     path = _workflow_path(workflows_dir, workflow_id)
     if not path.exists():
         raise ValueError(f"no imported workflow with id {workflow_id!r}")
@@ -61,6 +66,7 @@ def export_workflow(workflows_dir: Path, workflow_id: str, out_path: Path) -> di
     result = validate_workflow(workflow)
     if result["errors"]:
         raise ValueError(f"workflow has structural errors, not exported: {result['errors']}")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(workflow, indent=2, ensure_ascii=False))
     return {"warnings": result["warnings"]}
 

@@ -64,6 +64,20 @@ def test_list_workflow_nodes_filters_by_role(tmp_path):
     assert "CheckpointLoaderSimple" not in result.output
 
 
+def test_list_workflow_nodes_prints_output_socket_names(tmp_path):
+    # Fix 3: rewire-workflow-link --source-output requires knowing a node's
+    # actual output socket names, but list-workflow-nodes never printed
+    # them. Node 1 (CheckpointLoaderSimple) has outputs MODEL/CLIP/VAE --
+    # assert a non-generic-sounding one (CLIP) actually shows up in stdout.
+    workflows_dir = tmp_path / "workflows"
+    runner.invoke(app, ["import-workflow", str(FIXTURES_DIR / "comfyui_workflow_simple.json"),
+                         "--id", "my-flow", "--workflows-dir", str(workflows_dir)])
+    result = runner.invoke(app, ["list-workflow-nodes", "--id", "my-flow", "--workflows-dir", str(workflows_dir)])
+    assert result.exit_code == 0, result.output
+    assert "CLIP" in result.output
+    assert "VAE" in result.output
+
+
 def test_set_workflow_field_coerces_numeric_value(tmp_path):
     workflows_dir = tmp_path / "workflows"
     runner.invoke(app, ["import-workflow", str(FIXTURES_DIR / "comfyui_workflow_simple.json"),
@@ -74,6 +88,78 @@ def test_set_workflow_field_coerces_numeric_value(tmp_path):
     stored = json.loads((workflows_dir / "my-flow" / "workflow.json").read_text())
     node = next(n for n in stored["nodes"] if n["id"] == 5)
     assert node["widgets_values"][2] == 30  # int, not the string "30"
+
+
+def test_set_workflow_field_raw_string_keeps_numeric_looking_value_as_string(tmp_path):
+    # Fix 4: without --raw-string, a numeric-looking string like "2024"
+    # (e.g. a filename_prefix) would silently be coerced to an int. Reuse
+    # node 7's SaveImage "filename_prefix" widget (index 0) via set-workflow
+    # -raw is a different primitive -- exercise set-workflow-field directly
+    # on the CLIPTextEncode "text" field instead, which stays a string
+    # field: assert the raw string "2024" is written, not the int 2024.
+    workflows_dir = tmp_path / "workflows"
+    runner.invoke(app, ["import-workflow", str(FIXTURES_DIR / "comfyui_workflow_simple.json"),
+                         "--id", "my-flow", "--workflows-dir", str(workflows_dir)])
+    result = runner.invoke(app, ["set-workflow-field", "--id", "my-flow", "--node", "2",
+                                  "--field", "text", "--value", "2024", "--raw-string",
+                                  "--workflows-dir", str(workflows_dir)])
+    assert result.exit_code == 0, result.output
+    stored = json.loads((workflows_dir / "my-flow" / "workflow.json").read_text())
+    node = next(n for n in stored["nodes"] if n["id"] == 2)
+    assert node["widgets_values"][0] == "2024"
+    assert isinstance(node["widgets_values"][0], str)
+
+
+def test_set_workflow_field_without_raw_string_still_coerces_numeric_value(tmp_path):
+    # Regression guard: --raw-string must not change existing coercion
+    # behavior (Task 12) when the flag isn't passed.
+    workflows_dir = tmp_path / "workflows"
+    runner.invoke(app, ["import-workflow", str(FIXTURES_DIR / "comfyui_workflow_simple.json"),
+                         "--id", "my-flow", "--workflows-dir", str(workflows_dir)])
+    result = runner.invoke(app, ["set-workflow-field", "--id", "my-flow", "--node", "5",
+                                  "--field", "steps", "--value", "30", "--workflows-dir", str(workflows_dir)])
+    assert result.exit_code == 0, result.output
+    stored = json.loads((workflows_dir / "my-flow" / "workflow.json").read_text())
+    node = next(n for n in stored["nodes"] if n["id"] == 5)
+    assert node["widgets_values"][2] == 30
+    assert isinstance(node["widgets_values"][2], int)
+
+
+def test_set_workflow_raw_raw_string_keeps_numeric_looking_value_as_string(tmp_path):
+    workflows_dir = tmp_path / "workflows"
+    runner.invoke(app, ["import-workflow", str(FIXTURES_DIR / "comfyui_workflow_simple.json"),
+                         "--id", "my-flow", "--workflows-dir", str(workflows_dir)])
+    result = runner.invoke(app, ["set-workflow-raw", "--id", "my-flow", "--node", "7",
+                                  "--index", "0", "--value", "1984", "--raw-string",
+                                  "--workflows-dir", str(workflows_dir)])
+    assert result.exit_code == 0, result.output
+    stored = json.loads((workflows_dir / "my-flow" / "workflow.json").read_text())
+    node = next(n for n in stored["nodes"] if n["id"] == 7)
+    assert node["widgets_values"][0] == "1984"
+    assert isinstance(node["widgets_values"][0], str)
+
+
+def test_import_workflow_rejects_overwrite_without_force(tmp_path):
+    workflows_dir = tmp_path / "workflows"
+    runner.invoke(app, ["import-workflow", str(FIXTURES_DIR / "comfyui_workflow_simple.json"),
+                         "--id", "my-flow", "--workflows-dir", str(workflows_dir)])
+    stored_path = workflows_dir / "my-flow" / "workflow.json"
+    before = stored_path.read_text()
+
+    result = runner.invoke(app, ["import-workflow", str(FIXTURES_DIR / "comfyui_workflow_simple.json"),
+                                  "--id", "my-flow", "--workflows-dir", str(workflows_dir)])
+    assert result.exit_code == 1
+    assert "--force" in result.output
+    assert stored_path.read_text() == before
+
+
+def test_import_workflow_overwrites_with_force_flag(tmp_path):
+    workflows_dir = tmp_path / "workflows"
+    runner.invoke(app, ["import-workflow", str(FIXTURES_DIR / "comfyui_workflow_simple.json"),
+                         "--id", "my-flow", "--workflows-dir", str(workflows_dir)])
+    result = runner.invoke(app, ["import-workflow", str(FIXTURES_DIR / "comfyui_workflow_simple.json"),
+                                  "--id", "my-flow", "--force", "--workflows-dir", str(workflows_dir)])
+    assert result.exit_code == 0, result.output
 
 
 def test_remove_workflow_node_with_bypass_flag(tmp_path):
