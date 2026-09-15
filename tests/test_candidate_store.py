@@ -104,3 +104,29 @@ def test_get_candidate_found_and_missing():
     assert get_candidate(candidate_set, "001")["path"] == "x.png"
     with pytest.raises(ValueError):
         get_candidate(candidate_set, "999")
+
+
+def test_target_dir_character_turnaround(tmp_path: Path):
+    assert target_dir(tmp_path, "character:girl:turnaround:side") == (
+        tmp_path / "assets" / "characters" / "girl" / "turnaround" / "side"
+    )
+
+
+def test_target_dir_rejects_malformed_turnaround_segment_count(tmp_path: Path):
+    with pytest.raises(ValueError):
+        target_dir(tmp_path, "character:girl:turnaround")
+
+
+def test_target_dir_rejects_wrong_literal_third_segment(tmp_path: Path):
+    with pytest.raises(ValueError):
+        target_dir(tmp_path, "character:girl:notturnaround:side")
+
+
+@pytest.mark.parametrize("angle", ["", "../etc", "a/b", "a\\b", ".."])
+def test_target_dir_rejects_unsafe_turnaround_angle(tmp_path: Path, angle):
+    with pytest.raises(ValueError):
+        target_dir(tmp_path, f"character:girl:turnaround:{angle}")
+
+
+def test_scope_for_target_turnaround_is_bibles():
+    assert scope_for_target("character:girl:turnaround:side") == "bibles"

@@ -665,3 +665,25 @@ def test_edit_candidate_on_missing_id_raises_clear_error(tmp_path: Path):
             instruction="black jacket", provider=provider, provider_name="mock",
             model="nano-banana",
         )
+
+
+def test_select_candidate_copies_to_turnaround_reference_png(tmp_path: Path):
+    target = "character:girl:turnaround:side"
+    directory = tmp_path / "assets" / "characters" / "girl" / "turnaround" / "side" / "candidates"
+    directory.mkdir(parents=True)
+    (directory / "001.png").write_bytes(b"SIDE-CANDIDATE")
+    add_candidates(tmp_path, target, [{
+        "id": "001", "path": "candidates/001.png", "provider": "mock", "model": "nano-banana",
+        "prompt": "a girl, side view", "parent": None, "operation": "generate", "job": None,
+        "estimated_cost": None, "created_at": "2026-08-22T00:00:00Z",
+    }])
+
+    result = select_candidate(tmp_path, target, "001")
+
+    assert result == {
+        "target": target,
+        "selected": "001",
+        "canonical_path": "assets/characters/girl/turnaround/side/reference.png",
+    }
+    reference_path = tmp_path / "assets" / "characters" / "girl" / "turnaround" / "side" / "reference.png"
+    assert reference_path.read_bytes() == b"SIDE-CANDIDATE"

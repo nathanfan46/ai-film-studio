@@ -6,6 +6,8 @@ import os
 import tempfile
 from pathlib import Path
 
+from ai_film.character_reference import validate_angle_segment
+
 _TARGET_KINDS = ("character", "env", "shot")
 
 
@@ -13,9 +15,12 @@ def target_dir(project_dir: Path, target: str) -> Path:
     parts = target.split(":")
     kind = parts[0]
     if kind == "character":
-        if len(parts) != 2:
-            raise ValueError(f"malformed character target {target!r}")
-        return project_dir / "assets" / "characters" / parts[1]
+        if len(parts) == 2:
+            return project_dir / "assets" / "characters" / parts[1]
+        if len(parts) == 4 and parts[2] == "turnaround":
+            validate_angle_segment(parts[3])
+            return project_dir / "assets" / "characters" / parts[1] / "turnaround" / parts[3]
+        raise ValueError(f"malformed character target {target!r}")
     if kind == "env":
         if len(parts) != 2:
             raise ValueError(f"malformed env target {target!r}")
