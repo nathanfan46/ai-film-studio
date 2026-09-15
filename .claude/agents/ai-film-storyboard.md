@@ -72,7 +72,7 @@ Write one file per shot at `03_shots/S<SS>_SH<NN>.json` (`<SS>` = 2-digit scene 
   "dialogue": {"text": "<line, or empty string if none>", "speaker": "<character name, or empty string if none>"},
   "environment": {"name": "<scene's Location name>", "reference": "assets/environments/<scene's Location name>/reference.png"},
   "characters": [
-    {"name": "<character name>", "reference": "assets/characters/<character name>/reference.png"}
+    {"name": "<character name>", "reference": "<resolved via ai-film resolve-character-reference — see below>", "orientation": "<optional — omit this key entirely unless this shot needs a specific angle>"}
   ],
   "generation": {
     "image": {"status": "pending", "attempts": 0},
@@ -85,6 +85,14 @@ Write one file per shot at `03_shots/S<SS>_SH<NN>.json` (`<SS>` = 2-digit scene 
 ```
 
 `id` must match the filename stem exactly. `environment` is copied verbatim from the scene's `**Location:**` line — every shot in a scene gets the exact same `environment.name`/`environment.reference`, with no exception and no per-shot override; this is not a judgment call the way narrowing `characters` down to who's visible in one shot is (see below) — a scene has exactly one location, period. If a scene has no `**Location:**` line at all (rare — the Director's brainstorming step should always end up naming one, but not guaranteed), omit the `environment` key from every shot in that scene entirely, the same way `characters` can already be an empty list — never invent a name. `characters` lists every character appearing in that shot (omit `characters` entries for anyone not visible/relevant to that specific shot, even if they're in the scene). Set `dialogue.speaker`/`dialogue.text` to `""` when the shot has no line. `generation.voice`/`sfx`/`music` stay `"not_required"` unless you have a specific reason to mark voice `"pending"` for a shot with dialogue — even then, leave that to a human decision later; don't change these three away from `"not_required"` in this agent.
+
+For each character in a shot's `characters` list, decide `orientation` before writing `reference`: it identifies which character-facing view should be used as the visual identity reference for this shot — it is not `camera` (shot framing) and not the camera's position relative to the character. A shot written as the character walking away from camera implies `orientation: "back"` regardless of whether `camera.shot` is wide or close; an over-the-shoulder shot implies `orientation: "three_quarter"` or `"side"` depending on blocking. When in doubt, or when the shot doesn't call for anything unusual, omit `orientation` entirely from that character's entry — most shots need no explicit angle. Whether or not you set `orientation`, resolve `reference` by running:
+
+```bash
+ai-film resolve-character-reference --name "<character name>" --orientation "<orientation, or omit this flag entirely if you didn't set one>"
+```
+
+and use its stdout (one project-relative path, e.g. `assets/characters/Mara Voss/turnaround/back/reference.png`, or the fallback `assets/characters/Mara Voss/reference.png`) as that character's `reference` value verbatim — never hand-construct this path yourself. This resolves to the locked back/side/three-quarter angle when one exists and was requested, and transparently falls back to the primary reference otherwise, so it is always safe to call even for a character with no turnaround set at all.
 
 After writing a scene's shot files, run `ai-film validate` and fix anything it reports before moving on.
 
