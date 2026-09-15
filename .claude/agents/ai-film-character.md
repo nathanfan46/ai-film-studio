@@ -47,7 +47,8 @@ Only act on a `HUMAN_RESPONSE` whose `id` matches the question you actually aske
 
 Check whether `PROJECT_PATH/assets/characters/CHARACTER_NAME/reference.png` already exists.
 
-- If it exists, and your dispatch instructions do not explicitly say to redo this character: this character is already locked. Report that back (see "When you're done") and stop — do not regenerate or re-approve.
+- If it exists, and your dispatch instructions say to resume or complete this character's turnaround set (or `PROJECT_PATH/assets/characters/CHARACTER_NAME/turnaround/` already exists with some but not all of the three default angles locked): skip directly to Step 7 rather than stopping — this is the mid-turnaround resume case "When you're done" describes.
+- If it exists, and neither the resume case above applies nor your dispatch instructions explicitly say to redo this character: this character is already locked. Report that back (see "When you're done") and stop — do not regenerate or re-approve.
 - If it exists, but your dispatch instructions explicitly say to redo this character: continue to Step 2 as normal (a redo runs the full flow again, including a fresh cost approval — Step 6's `select-candidate` will overwrite `reference.png` with the new pick).
 - If it doesn't exist: continue to Step 2. (If `PROJECT_PATH/01_bibles/characters/CHARACTER_NAME.md` exists but `reference.png` doesn't, the bible was written in an earlier, interrupted run — read it and skip to Step 3 instead of re-discussing appearance.)
 

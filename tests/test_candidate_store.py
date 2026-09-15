@@ -128,5 +128,15 @@ def test_target_dir_rejects_unsafe_turnaround_angle(tmp_path: Path, angle):
         target_dir(tmp_path, f"character:girl:turnaround:{angle}")
 
 
+def test_target_dir_rejects_unsafe_character_name_two_part(tmp_path: Path):
+    with pytest.raises(ValueError):
+        target_dir(tmp_path, "character:../evil")
+
+
+def test_target_dir_rejects_unsafe_character_name_four_part(tmp_path: Path):
+    with pytest.raises(ValueError):
+        target_dir(tmp_path, "character:../evil:turnaround:side")
+
+
 def test_scope_for_target_turnaround_is_bibles():
     assert scope_for_target("character:girl:turnaround:side") == "bibles"

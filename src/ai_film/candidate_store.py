@@ -16,8 +16,10 @@ def target_dir(project_dir: Path, target: str) -> Path:
     kind = parts[0]
     if kind == "character":
         if len(parts) == 2:
+            validate_angle_segment(parts[1])
             return project_dir / "assets" / "characters" / parts[1]
         if len(parts) == 4 and parts[2] == "turnaround":
+            validate_angle_segment(parts[1])
             validate_angle_segment(parts[3])
             return project_dir / "assets" / "characters" / parts[1] / "turnaround" / parts[3]
         raise ValueError(f"malformed character target {target!r}")

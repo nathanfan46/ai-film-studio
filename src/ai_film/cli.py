@@ -12,6 +12,7 @@ from ai_film import __version__
 from ai_film.approval import approve_generation as approve_generation_service
 from ai_film.asset_staleness import check_stale as check_stale_service
 from ai_film.character_reference import resolve_character_reference as resolve_character_reference_service
+from ai_film.character_reference import validate_angle_segment
 from ai_film.batch import run_bounded
 from ai_film.errors import CostGateError, ProviderError
 from ai_film.models import Capability
@@ -1464,7 +1465,20 @@ def generate_candidates_cmd(
     else:
         target_parts = target.split(":")
         if target_parts[0] == "character" and len(target_parts) == 4 and target_parts[2] == "turnaround":
-            references = [str(path / "assets" / "characters" / target_parts[1] / "reference.png")]
+            try:
+                validate_angle_segment(target_parts[1])
+            except ValueError as exc:
+                typer.echo(str(exc), err=True)
+                raise typer.Exit(code=1)
+            primary_reference = path / "assets" / "characters" / target_parts[1] / "reference.png"
+            if not primary_reference.exists():
+                typer.echo(
+                    f"primary reference not found: {primary_reference} — "
+                    f"lock the primary reference for {target_parts[1]!r} before generating turnaround angles",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            references = [str(primary_reference)]
 
     def _run():
         provider = resolve_provider(Capability.IMAGE, stage_config["provider"])

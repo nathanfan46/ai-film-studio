@@ -472,3 +472,17 @@ def test_generate_candidates_turnaround_always_references_primary_not_other_angl
 
     expected = [str(reference_dir / "reference.png")]
     assert captured_reference_paths == [expected, expected, expected]
+
+
+def test_generate_candidates_turnaround_fails_without_primary_reference(tmp_path: Path):
+    project_dir = _init_mock_project(tmp_path)
+    _approve_bibles(project_dir, "character:girl:turnaround:side")
+
+    result = runner.invoke(
+        app,
+        ["generate-candidates", "--target", "character:girl:turnaround:side", "--count", "2",
+         "--prompt", "a girl, side view, isolated character reference", "--path", str(project_dir)],
+    )
+
+    assert result.exit_code == 1
+    assert "primary reference" in result.output
