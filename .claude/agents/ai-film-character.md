@@ -103,7 +103,7 @@ then continue to Step 4.
 
 ## Step 4: Generate and review candidates
 
-Build an image prompt from the appearance section you just wrote (style + build + clothing + distinguishing features, comma-separated, matching the cinematic tone from `story.md`). Run:
+Build an image prompt from the appearance section you just wrote (style + build + clothing + distinguishing features, comma-separated, matching the cinematic tone from `story.md`), and always append this isolation requirement so the locked reference has no scene content to fight with later: "isolated character reference, plain uniform neutral background, no environment, no scenery, no architectural elements, no props, no narrative setting, no cinematic background effects, full body, consistent studio-style lighting". Run:
 
 ```bash
 ai-film generate-candidates --target character:CHARACTER_NAME --count <N> --prompt "<prompt>"
@@ -145,6 +145,44 @@ ai-film select-candidate --target character:CHARACTER_NAME --id <candidate-id>
 
 This copies the file to `assets/characters/CHARACTER_NAME/reference.png`. If the user changes their mind afterward, `select-candidate` is re-runnable with a different `--id` — no special handling needed, just another `type: selection` round trip.
 
+## Step 7: Offer a turnaround set (optional, skippable)
+
+Once `reference.png` is locked, emit a `NEEDS_INPUT` with `type: confirmation`, `id: turnaround_offer`, asking: "Generate a turnaround set (three-quarter, side, back) for continuity across angles? This runs the candidate generation workflow for each of these three angles — you can stop after any of them." Stop your turn there.
+
+- If the `HUMAN_RESPONSE` answer is no (or anything other than a clear yes): skip to "When you're done" and report the character as locked with no turnaround set — this is a complete, normal outcome, not a partial one.
+- If yes: estimate cost for all three angles at once (same per-candidate default count and cost table as Step 3, `3 × <N>` candidates total across the three angles) and emit a fresh `NEEDS_INPUT` (`type: cost_approval`, `id: cost_approval_turnaround`). Stop your turn there.
+
+Only once resumed with a matching `HUMAN_RESPONSE`:
+
+- If `approved: true`, run:
+
+```bash
+ai-film approve-generation --scope bibles --targets character:CHARACTER_NAME:turnaround:three_quarter,character:CHARACTER_NAME:turnaround:side,character:CHARACTER_NAME:turnaround:back
+```
+
+  This is a separate target-string set from Step 3's `character:CHARACTER_NAME` approval — approving the primary reference does not also approve these three turnaround targets, and vice versa.
+
+- If `approved: false`, read the `message` (if any), revise (fewer angles, a different count), and emit a *new* `cost_approval` `NEEDS_INPUT` with a fresh `id` — never reuse `cost_approval_turnaround`.
+
+For each of the three angles, in order (`three_quarter`, then `side`, then `back`):
+
+1. Build the angle's prompt from the same appearance section as Step 4, plus the same isolation requirement, plus this angle's own view (e.g. "three-quarter view", "side profile view", "back view, facing away from camera") plus an explicit consistency instruction: "preserve the exact outfit, hairstyle, and proportions from the reference image — do not redesign." This reduces avoidable visual drift between angles; it is not a guarantee the model won't drift a detail, which is exactly why you still review each candidate below rather than auto-selecting one.
+2. Run:
+
+```bash
+ai-film generate-candidates --target character:CHARACTER_NAME:turnaround:<angle> --count <N> --prompt "<prompt>"
+```
+
+   This always conditions on the already-locked primary `reference.png` automatically (never on another angle's output, even one you already locked earlier in this same loop) — you don't need to pass a reference path yourself. Handle a generation failure exactly like Step 4's: a `type: confirmation` `NEEDS_INPUT` showing the exact error and the retry/adjust/stop choices.
+3. Run `ai-film review --target character:CHARACTER_NAME:turnaround:<angle>` and Read each candidate PNG directly, same as Step 4.
+4. Discuss/refine using the same `type: clarification`/`type: selection` round trips as Step 5 (`edit-candidate --target character:CHARACTER_NAME:turnaround:<angle> ...`), then lock the chosen candidate:
+
+```bash
+ai-film select-candidate --target character:CHARACTER_NAME:turnaround:<angle> --id <candidate-id>
+```
+
+5. Before moving to the next angle, emit one more `type: confirmation` `NEEDS_INPUT` (`id: turnaround_next_<angle>`) asking whether to continue to the next angle or stop here — a human is allowed to lock `three_quarter` and `side` and decide `back` isn't worth it for this character; that is a complete, normal outcome, not a failure, and the resolver already falls back to the primary reference for any angle never locked.
+
 ## When you're done
 
-Once `reference.png` is locked, your final message is a genuine completion, not a `NEEDS_INPUT` — report: the bible path, the final candidate id selected, and the `reference.png` path. If you stopped early (Step 1 re-entry, or the user asked to pause), say exactly what state you left things in so a re-dispatch of this same agent picks up correctly.
+Once `reference.png` is locked and Step 7's turnaround offer has been resolved (declined, or one or more angles completed/skipped), your final message is a genuine completion, not a `NEEDS_INPUT` — report: the bible path, the final candidate id selected for the primary reference, the `reference.png` path, and — if any turnaround angles were completed — which ones ("Character Reference Set locked: front + three_quarter + side") versus "character locked" alone when none were. If you stopped early (Step 1 re-entry, or the user asked to pause at any point including mid-turnaround), say exactly what state you left things in so a re-dispatch of this same agent picks up correctly.
