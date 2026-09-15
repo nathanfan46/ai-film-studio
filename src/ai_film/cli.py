@@ -11,6 +11,7 @@ from dotenv import find_dotenv, load_dotenv
 from ai_film import __version__
 from ai_film.approval import approve_generation as approve_generation_service
 from ai_film.asset_staleness import check_stale as check_stale_service
+from ai_film.character_reference import resolve_character_reference as resolve_character_reference_service
 from ai_film.batch import run_bounded
 from ai_film.errors import CostGateError, ProviderError
 from ai_film.models import Capability
@@ -199,6 +200,23 @@ def check_stale_cmd(path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path")) -
         typer.echo(f"\n{entry['shot_id']}")
         for asset_path in entry["changed_assets"]:
             typer.echo(f"  {asset_path} changed since generation")
+
+
+@app.command(name="resolve-character-reference")
+def resolve_character_reference_cmd(
+    name: str = typer.Option(..., "--name"),
+    orientation: str = typer.Option(None, "--orientation"),
+    path: Path = typer.Option(DEFAULT_PROJECT_PATH, "--path"),
+) -> None:
+    """Print the characters[].reference path to use for this character, given
+    an optional orientation judgment. Falls back to the primary reference.png
+    when orientation is omitted or that angle isn't locked yet."""
+    try:
+        resolved = resolve_character_reference_service(path, name, orientation)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(resolved)
 
 
 def _stage_config(path: Path, stage: str, default: dict | None = None) -> dict:
