@@ -1443,6 +1443,10 @@ def generate_candidates_cmd(
         variant_mode = prompt is None
         if variant_mode:
             spatial = _effective_spatial(path, shot_id, shot_data)
+    else:
+        target_parts = target.split(":")
+        if target_parts[0] == "character" and len(target_parts) == 4 and target_parts[2] == "turnaround":
+            references = [str(path / "assets" / "characters" / target_parts[1] / "reference.png")]
 
     def _run():
         provider = resolve_provider(Capability.IMAGE, stage_config["provider"])
@@ -1456,7 +1460,7 @@ def generate_candidates_cmd(
                 poll_interval_seconds=gen_config["poll_interval_seconds"],
                 reference_paths=references, cameras=cameras_list, spatial=spatial,
             )
-        kwargs = {"reference_paths": references} if target.startswith("shot:") else {}
+        kwargs = {"reference_paths": references} if (target.startswith("shot:") or references) else {}
         return generate_candidates_service(
             project_dir=path, target=target, provider=provider,
             prompt=prompt, model=stage_config["model"], count=count,

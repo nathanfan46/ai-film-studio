@@ -3,6 +3,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+import ai_film.cli as cli_module
 from ai_film.cli import app
 from ai_film.providers.mock.image import MockImageProvider
 from ai_film.shot_store import save_shot
@@ -380,3 +381,94 @@ def test_edit_candidate_rebuilds_review_gallery_with_the_new_candidate(tmp_path:
     gallery_path = project_dir / "assets" / "characters" / "girl" / "candidates" / "review.html"
     assert str(gallery_path) in result.output
     assert "002.png" in gallery_path.read_text()
+
+
+def test_generate_candidates_turnaround_auto_attaches_primary_reference(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    reference_dir = project_dir / "assets" / "characters" / "girl"
+    reference_dir.mkdir(parents=True)
+    (reference_dir / "reference.png").write_bytes(b"PRIMARY-REF")
+    _approve_bibles(project_dir, "character:girl:turnaround:side")
+
+    captured = {}
+    original = cli_module.generate_candidates_service
+
+    def _spy(*args, **kwargs):
+        captured["reference_paths"] = kwargs.get("reference_paths")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(cli_module, "generate_candidates_service", _spy)
+
+    result = runner.invoke(
+        app,
+        ["generate-candidates", "--target", "character:girl:turnaround:side", "--count", "2",
+         "--prompt", "a girl, side view, isolated character reference", "--path", str(project_dir)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["reference_paths"] == [str(reference_dir / "reference.png")]
+    for i in range(1, 3):
+        assert (reference_dir / "turnaround" / "side" / "candidates" / f"{i:03d}.png").exists()
+
+
+def test_generate_candidates_plain_character_target_has_no_auto_reference(tmp_path: Path, monkeypatch):
+    project_dir = _init_mock_project(tmp_path)
+    _approve_bibles(project_dir, "character:girl")
+    captured = {}
+    original = cli_module.generate_candidates_service
+
+    def _spy(*args, **kwargs):
+        captured["reference_paths"] = kwargs.get("reference_paths")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(cli_module, "generate_candidates_service", _spy)
+
+    result = runner.invoke(
+        app,
+        ["generate-candidates", "--target", "character:girl", "--count", "1",
+         "--prompt", "a girl", "--path", str(project_dir)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["reference_paths"] is None
+
+
+def test_generate_candidates_turnaround_always_references_primary_not_other_angles(
+    tmp_path: Path, monkeypatch
+):
+    project_dir = _init_mock_project(tmp_path)
+    reference_dir = project_dir / "assets" / "characters" / "girl"
+    reference_dir.mkdir(parents=True)
+    (reference_dir / "reference.png").write_bytes(b"PRIMARY-REF")
+
+    captured_reference_paths = []
+    original = cli_module.generate_candidates_service
+
+    def _spy(*args, **kwargs):
+        captured_reference_paths.append(kwargs.get("reference_paths"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(cli_module, "generate_candidates_service", _spy)
+
+    for angle in ("three_quarter", "side", "back"):
+        target = f"character:girl:turnaround:{angle}"
+        _approve_bibles(project_dir, target)
+        result = runner.invoke(
+            app,
+            ["generate-candidates", "--target", target, "--count", "1",
+             "--prompt", f"a girl, {angle} view, isolated character reference",
+             "--path", str(project_dir)],
+        )
+        assert result.exit_code == 0, result.output
+
+        candidate_set = json.loads(
+            (project_dir / "assets" / "characters" / "girl" / "turnaround" / angle / "candidates.json").read_text()
+        )
+        candidate_id = candidate_set["candidates"][0]["id"]
+        select_result = runner.invoke(
+            app, ["select-candidate", "--target", target, "--id", candidate_id, "--path", str(project_dir)],
+        )
+        assert select_result.exit_code == 0, select_result.output
+
+    expected = [str(reference_dir / "reference.png")]
+    assert captured_reference_paths == [expected, expected, expected]
